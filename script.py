@@ -1,9 +1,11 @@
 import base64
 import io
 import re
+import string
 import time
 from datetime import date
 from pathlib import Path
+from enum import Enum
 
 import gradio as gr
 import modules.shared as shared
@@ -40,14 +42,14 @@ params = {
     'cfg_scale': 7,
     'secondary_prompt': False,
     'translations': False,
-    'checkpoint_prompt' : False,
+    'checkpoint_prompt': False,
     'processing': False,
     'disable_loras': False,
-    'description_weight' : '1',
-    'subject_weight' : '0',
-    'initial_weight' : '0',
-    'secondary_negative_prompt' : '',
-    'secondary_positive_prompt' : '',
+    'description_weight': '1',
+    'subject_weight': '0',
+    'initial_weight': '0',
+    'secondary_negative_prompt': '',
+    'secondary_positive_prompt': '',
     'showDescription': True
 }
 
@@ -86,23 +88,29 @@ def give_VRAM_priority(actor):
 
 if params['manage_VRAM']:
     give_VRAM_priority('set')
-characterfocus = ""
+
+
+class ImageMode(Enum):
+    SELFIE = 1
+
+
+characterFocus = ""
 positive_suffix = ""
 negative_suffix = ""
 a1111Status = {
-    'sd_checkpoint' : '',
-    'checkpoint_positive_prompt' : '',
-    'checkpoint_negative_prompt' : ''
-    }
+    'sd_checkpoint': '',
+    'checkpoint_positive_prompt': '',
+    'checkpoint_negative_prompt': ''
+}
 checkpoint_list = []
 samplers = ['DDIM', 'DPM++ 2M Karras']  # TODO: get the availible samplers with http://{address}}/sdapi/v1/samplers
 SD_models = ['NeverEndingDream']  # TODO: get with http://{address}}/sdapi/v1/sd-models and allow user to select
 initial_string = ""
 
-picture_response = False  # specifies if the next model response should appear as a picture
+picture_response = False
 
 
-def add_translations(description,triggered_array,tpatterns):
+def add_translations(description, triggered_array, tpatterns):
     global positive_suffix, negative_suffix
     i = 0
     for word_pair in tpatterns['pairs']:
@@ -114,10 +122,12 @@ def add_translations(description,triggered_array,tpatterns):
         i = i + 1
     return triggered_array
 
+
 def state_modifier(state):
     if picture_response:
         state['stream'] = False
     return state
+
 
 def remove_surrounded_chars(string):
     # this expression matches to 'as few symbols as possible (0 upwards) between any asterisks' OR
@@ -125,73 +135,64 @@ def remove_surrounded_chars(string):
     return re.sub('\*[^\*]*?(\*|$)', '', string)
 
 
-def triggers_are_in(string):
-    string = remove_surrounded_chars(string)
-    # regex searches for send|main|message|me (at the end of the word) followed by
-    # a whole word of image|pic|picture|photo|snap|snapshot|selfie|meme(s),
-    # (?aims) are regex parser flags
-    return bool(re.search('(?aims)(send|mail|message|me)\\b.+?\\b(image|pic(ture)?|photo|polaroid|snap(shot)?|selfie|meme)s?\\b', string))
+import re
+import string
 
-def request_generation(case,string):
-    global characterfocus, subject
+
+def string_evaluation(input_string):
+    global characterFocus, subject
+    characterFocus = False
     subject = ""
-    if case == 1:
-        toggle_generation(True)
-        characterfocus = True
-        string = string.replace("yourself","you")
-        after_you = string.split("you", 1)[1] # subdivide the string once by the first 'you' instance and get what's coming after it
-        if after_you != '':
-            string = "Describe in vivid detail as if you were describing to a blind person your current clothing and the environment. Describe in vivid detail as if you were describing to a blind person yourself performing the following action: " + after_you.strip()
-            subject = after_you.strip()
-        else:
-            string = "Describe in vivid detail as if you were describing to a blind person your current clothing and the environment. Describe yourself in vivid detail as if you were describing to a blind person."
-    elif case == 2:
-        toggle_generation(True)
-        subject = string.split('of', 1)[1]  # subdivide the string once by the first 'of' instance and get what's coming after it
-        string = "Describe in vivid detail as if you were describing to a blind person the following: " + subject.strip()
-    elif case == 3:
-        toggle_generation(True)
-        characterfocus = True
-        string = "Describe in vivid detail as if you were describing to a blind person your appearance, your current state of clothing, your surroundings and what you are doing right now."
-    return string
 
-def string_evaluation(string):
-    global characterfocus
-    orig_string = string
-    input_type = 0
-    subjects = ['yourself', 'you']
-    characterfocus = False
-    if triggers_are_in(string):  # check for trigger words for generation
-        string = string.lower()
-        if "of" in string:
-            if any(target in string for target in subjects): # the focus of the image should be on the sending character
-                input_type = 1
-            else:
-                input_type = 2
-        else:
-            input_type = 3
-    return request_generation(input_type,string)
+    # Search for the pattern where "send" is followed by an image-related keyword
+    match = re.search(r'(?aims)(.*?)\b(send)\b.*?\b(pic|picture|photo|image|selfie)\b(.*)', input_string)
+
+    # Return the original string if no match is found
+    if match is None:
+        return input_string
+
+    toggle_generation(True)
+
+    # Search for optional leading "and|then" and trailing "of you|yourself" patterns
+    starts_with_match = re.search(r'(?aims)\b(and|then)\b', match.group(1))
+    ends_with_match = re.search(r'(?aims)\b(of)\b\s+\b((you|yourself)\b)?', match.group(4))
+
+    # Adjust start and end indices based on matches
+    start, end = match.start(2), match.end(3)
+    if not starts_with_match:
+        start = 0  # Reset start if it doesn't start with a command
+
+    # Default prompt subject based on the end of the matched string
+    prompt_subject = input_string[end:]
+
+    if match.group(3) == "selfie" or not match.group(4) or ends_with_match.group(2):
+        characterFocus = True
+
+    if characterFocus and not ends_with_match:
+        prompt_subject = " of your current state, you, your outfit and your surroundings."
+
+    prompt_subject = prompt_subject.rstrip(string.punctuation)
+
+    # Construct the result string
+    result = input_string[:start] + "provide a vivid description" + prompt_subject + ". Provide visual details only."
+
+    print(result, characterFocus)
+
+    return result
 
 def input_modifier(string):
-    global characterfocus
-    """
-    This function is applied to your text inputs before
-    they are fed into the model.
-    """
-
-    global params, initial_string
+    global initial_string, characterFocus, params
     initial_string = string
-    if params['mode'] == 1:  # For immersive/interactive mode, send to string evaluation
-            return string_evaluation(string)
-    if params['mode'] == 2:
-        characterfocus = False
-        string = string.lower()
-        return string
-    if params['mode'] == 0:
-        return string
+    characterFocus = False
+
+    if params['mode'] == 1:
+        return string_evaluation(string)
+
+    return string
+
 
 def create_suffix():
-    global params, positive_suffix, negative_suffix, characterfocus
+    global params, positive_suffix, negative_suffix, characterFocus
     positive_suffix = ""
     negative_suffix = ""
 
@@ -221,7 +222,7 @@ def create_suffix():
         else:
             positive_suffix = a1111Status['checkpoint_positive_prompt']
             negative_suffix = a1111Status['checkpoint_negative_prompt']
-    if characterfocus and character != 'None':
+    if characterFocus and character != 'None':
         positive_suffix = data['sd_tags_positive'] if 'sd_tags_positive' in data else ""
         negative_suffix = data['sd_tags_negative'] if 'sd_tags_negative' in data else ""
         if params['secondary_prompt']:
@@ -231,27 +232,29 @@ def create_suffix():
             positive_suffix = positive_suffix + ", " + a1111Status['checkpoint_positive_prompt'] if 'checkpoint_positive_prompt' in a1111Status else positive_suffix
             negative_suffix = negative_suffix + ", " + a1111Status['checkpoint_negative_prompt'] if 'checkpoint_negative_prompt' in a1111Status else negative_suffix
 
-def clean_spaces(text): # Cleanup double spaces, double commas, and comma-space-comma as these are all meaningless to us and interfere with splitting up tags
+
+def clean_spaces(text):  # Cleanup double spaces, double commas, and comma-space-comma as these are all meaningless to us and interfere with splitting up tags
     while any([", ," in text, ",," in text, "  " in text]):
         text = text.replace(", ,", ",")
         text = text.replace(",,", ",")
         text = text.replace("  ", " ")
     try:
-        while any([text[0] == " ",text[0] == ","]): # Cleanup leading spaces and commas, trailing spaces and commas
+        while any([text[0] == " ", text[0] == ","]):  # Cleanup leading spaces and commas, trailing spaces and commas
             if text[0] == " ":
-                text = text.replace(" ","",1)
+                text = text.replace(" ", "", 1)
             if text[0] == ",":
-                text = text.replace(",","",1)
-        while any([text[len(text)-1] == " ",text[len(text)-1] == ","]):
-            if text[len(text)-1] == " ":
-                text = text[::-1].replace(" ","",1)[::-1]
-            if text[len(text)-1] == ",":
-                text = text[::-1].replace(",","",1)[::-1]
-    except IndexError: # IndexError is expected if string is empty or becomes empty during cleanup and can be safely ignored
+                text = text.replace(",", "", 1)
+        while any([text[len(text) - 1] == " ", text[len(text) - 1] == ","]):
+            if text[len(text) - 1] == " ":
+                text = text[::-1].replace(" ", "", 1)[::-1]
+            if text[len(text) - 1] == ",":
+                text = text[::-1].replace(",", "", 1)[::-1]
+    except IndexError:  # IndexError is expected if string is empty or becomes empty during cleanup and can be safely ignored
         pass
     except:
         print("Error cleaning up text")
     return text
+
 
 def tag_calculator(affix):
     string_tags = affix
@@ -259,19 +262,19 @@ def tag_calculator(affix):
     affix = affix.replace(' ,', ',')
     tags = affix.split(",")
 
-    if params['processing'] == False: # A simple processor that removes exact duplicates (does not remove duplicates with different weights)
+    if params['processing'] == False:  # A simple processor that removes exact duplicates (does not remove duplicates with different weights)
         string_tags = ""
         unique = []
         for tag in tags:
             if tag not in unique:
-                    unique.append(tag)
+                unique.append(tag)
         for tag in unique:
-                string_tags += ", " + tag
+            string_tags += ", " + tag
 
-    if params['processing'] == True: # A smarter processor that calculates resulting tags from multiple tags
+    if params['processing'] == True:  # A smarter processor that calculates resulting tags from multiple tags
         string_tags = ""
 
-        class tag_objects: # Tags have three characteristics, their text, their type and their weight. The type distinguishes between simple tags without parenthesis, LORAs and weighted tags
+        class tag_objects:  # Tags have three characteristics, their text, their type and their weight. The type distinguishes between simple tags without parenthesis, LORAs and weighted tags
             def __init__(self, text, tag_type, weight):
                 self.text = text
                 self.tag_type = tag_type
@@ -279,27 +282,27 @@ def tag_calculator(affix):
 
         initial_tags = []
 
-        for tag in tags: # Create an array of all tags as objects. Use the first character in the tag to distinguish the type
+        for tag in tags:  # Create an array of all tags as objects. Use the first character in the tag to distinguish the type
             if tag:
                 if tag[0] != "(" and tag[0] != "<":
-                    initial_tags.append(tag_objects(tag,"simple",1.0)) # Simple tags start with neither a ( or a < and are assigned a weight of one
+                    initial_tags.append(tag_objects(tag, "simple", 1.0))  # Simple tags start with neither a ( or a < and are assigned a weight of one
                 if tag[0] == "<":
                     pattern = r'.*?\:(.*):(.*)\>.*'
-                    match = re.search(pattern,tag)
-                    initial_tags.append(tag_objects(match.group(1),"lora",match.group(2))) # LORAs start with a < and have their own weight indicated with them
+                    match = re.search(pattern, tag)
+                    initial_tags.append(tag_objects(match.group(1), "lora", match.group(2)))  # LORAs start with a < and have their own weight indicated with them
                 if tag[0] == "(":
                     if ":" in tag:
                         pattern = r'\((.*)\:(.*)\).*'
-                        match = re.search(pattern,tag)
-                        initial_tags.append(tag_objects(match.group(1),"weighted",match.group(2))) # Weighted tags start with a ( and their weight can be indicated after a :
+                        match = re.search(pattern, tag)
+                        initial_tags.append(tag_objects(match.group(1), "weighted", match.group(2)))  # Weighted tags start with a ( and their weight can be indicated after a :
                     else:
                         pattern = r'\((.*)\).*'
-                        match = re.search(pattern,tag)
-                        initial_tags.append(tag_objects(match.group(1),"weighted",1.2)) # Weighted tags sometimes don't have a weight indicated, in these cases I have assigned them an arbitrary weight of 1.2
+                        match = re.search(pattern, tag)
+                        initial_tags.append(tag_objects(match.group(1), "weighted", 1.2))  # Weighted tags sometimes don't have a weight indicated, in these cases I have assigned them an arbitrary weight of 1.2
 
         unique = []
 
-        for tag in initial_tags: # Remove duplicate simple tags without parenthesis, increase weight according to repetition, convert them to weighted tags and put them back into the array so they can later be processed again as weighted tags
+        for tag in initial_tags:  # Remove duplicate simple tags without parenthesis, increase weight according to repetition, convert them to weighted tags and put them back into the array so they can later be processed again as weighted tags
             if tag.tag_type == "simple":
                 if any(x.text == tag.text for x in unique):
                     for matched_tag in unique:
@@ -307,12 +310,12 @@ def tag_calculator(affix):
                             resulting_weight = matched_tag.weight + 0.1
                             matched_tag.weight = float(resulting_weight)
                 else:
-                    unique.append(tag_objects(tag.text,"weighted",tag.weight))
+                    unique.append(tag_objects(tag.text, "weighted", tag.weight))
         initial_tags = initial_tags + unique
 
         loras = []
 
-        for tag in initial_tags: # Remove duplicate LORAs, keep only highest weight found and put them into a separate array
+        for tag in initial_tags:  # Remove duplicate LORAs, keep only highest weight found and put them into a separate array
             if tag.tag_type == "lora":
                 if any(x.text == tag.text for x in loras):
                     for matched_tag in loras:
@@ -320,11 +323,11 @@ def tag_calculator(affix):
                             if tag.weight > matched_tag.weight:
                                 matched_tag.weight = float(tag.weight)
                 else:
-                    loras.append(tag_objects(tag.text,"lora",tag.weight))
+                    loras.append(tag_objects(tag.text, "lora", tag.weight))
 
         final_tags = []
 
-        for tag in initial_tags: # Remove duplicate weighted tags and calculate final tag weight (including converted simple tags) and the unique ones with their final weight in a separate array
+        for tag in initial_tags:  # Remove duplicate weighted tags and calculate final tag weight (including converted simple tags) and the unique ones with their final weight in a separate array
             if tag.tag_type == "weighted":
                 if any(x.text == tag.text for x in final_tags):
                     for matched_tag in final_tags:
@@ -335,22 +338,23 @@ def tag_calculator(affix):
                                 resulting_weight = matched_tag.weight + (tag.weight - 1)
                             matched_tag.weight = float(resulting_weight)
                 else:
-                    final_tags.append(tag_objects(tag.text,tag.tag_type,tag.weight))
+                    final_tags.append(tag_objects(tag.text, tag.tag_type, tag.weight))
 
-        for tag in final_tags: # Construct a string from the finalized unique weighted tags and the unique LORAs to pass to the payload
+        for tag in final_tags:  # Construct a string from the finalized unique weighted tags and the unique LORAs to pass to the payload
             if tag.weight == 1.0:
                 string_tags += tag.text + ", "
             else:
                 if tag.weight > 0:
-                    string_tags += "(" + tag.text + ":" + str(round(tag.weight,1)) + "), "
+                    string_tags += "(" + tag.text + ":" + str(round(tag.weight, 1)) + "), "
 
         if not params['disable_loras']:
             for tag in loras:
-                string_tags += "<lora:" + tag.text + ":" + str(round(tag.weight,1)) + ">, "
+                string_tags += "<lora:" + tag.text + ":" + str(round(tag.weight, 1)) + ">, "
 
     return string_tags
 
-def build_body(description,subject,original):
+
+def build_body(description, subject, original):
     response = ""
     if all([description, float(params['description_weight']) != 0]):
         if float(params['description_weight']) == 1:
@@ -369,14 +373,14 @@ def build_body(description,subject,original):
             response += "(" + original + ":" + str(params['initial_weight']) + "), "
     return response
 
+
 # Get and save the Stable Diffusion-generated picture
 def get_SD_pictures(description):
-
     global subject, params, initial_string
-    
+
     if subject is None:
         subject = ''
-    
+
     if params['manage_VRAM']:
         give_VRAM_priority('SD')
 
@@ -399,10 +403,10 @@ def get_SD_pictures(description):
             data = json.loads(file_contents) if extension == "json" else yaml.safe_load(file_contents)
             tpatterns['pairs'] = tpatterns['pairs'] + data['translation_patterns'] if 'translation_patterns' in data else tpatterns['pairs']
         triggered_array = [0] * len(tpatterns['pairs'])
-        triggered_array = add_translations(initial_string,triggered_array,tpatterns)
-        add_translations(description,triggered_array,tpatterns)
+        triggered_array = add_translations(initial_string, triggered_array, tpatterns)
+        add_translations(description, triggered_array, tpatterns)
 
-    final_positive_prompt = html.unescape(clean_spaces(tag_calculator(clean_spaces(params['prompt_prefix'])) + ", " + build_body(description,subject,initial_string) + tag_calculator(clean_spaces(positive_suffix))))
+    final_positive_prompt = html.unescape(clean_spaces(tag_calculator(clean_spaces(params['prompt_prefix'])) + ", " + build_body(description, subject, initial_string) + tag_calculator(clean_spaces(positive_suffix))))
     final_negative_prompt = html.unescape(clean_spaces(tag_calculator(clean_spaces(params['negative_prompt'])) + ", " + tag_calculator(clean_spaces(negative_suffix))))
 
     payload = {
@@ -421,6 +425,8 @@ def get_SD_pictures(description):
         "restore_faces": params['restore_faces'],
         "override_settings_restore_afterwards": True
     }
+
+    print(final_positive_prompt)
 
     print(f'Prompting the image generator via the API on {params["address"]}...')
     response = requests.post(url=f'{params["address"]}/sdapi/v1/txt2img', json=payload)
@@ -450,11 +456,12 @@ def get_SD_pictures(description):
             image_bytes = buffered.getvalue()
             img_str = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode()
             visible_result = visible_result + f'<img src="{img_str}" alt="{description}">\n'
-            
+
     if params['manage_VRAM']:
         give_VRAM_priority('LLM')
 
     return visible_result
+
 
 # TODO: how do I make the UI history ignore the resulting pictures (I don't want HTML to appear in history)
 # and replace it with 'text' for the purposes of logging?
@@ -464,8 +471,8 @@ def output_modifier(string, state):
     """
 
     global picture_response, params, character
-    
-    character = state.get('character_menu','None')
+
+    character = state.get('character_menu', 'None')
 
     if not picture_response:
         return string
@@ -488,7 +495,7 @@ def output_modifier(string, state):
         text = string
 
     string = get_SD_pictures(string)
-    
+
     if params['showDescription']:
         string = string + "\n" + text
 
@@ -526,7 +533,6 @@ def filter_address(address):
 
 
 def SD_api_address_update(address):
-
     global params
 
     msg = "✔️ SD API is found on:"
@@ -541,6 +547,7 @@ def SD_api_address_update(address):
 
     return gr.Textbox.update(label=msg)
 
+
 def get_checkpoints():
     global a1111Status, checkpoint_list
 
@@ -550,6 +557,7 @@ def get_checkpoints():
     a1111Status['sd_checkpoint'] = options_json['sd_model_checkpoint']
     checkpoint_list = [result["title"] for result in models.json()]
     return gr.update(choices=checkpoint_list, value=a1111Status['sd_checkpoint'])
+
 
 def load_checkpoint(checkpoint):
     global a1111Status
@@ -567,9 +575,10 @@ def load_checkpoint(checkpoint):
             a1111Status['checkpoint_negative_prompt'] = pair['negative_prompt']
     requests.post(url=f'{params["address"]}/sdapi/v1/options', json=payload)
 
+
 def get_samplers():
     global params
-    
+
     try:
         response = requests.get(url=f'{params["address"]}/sdapi/v1/samplers')
         response.raise_for_status()
@@ -579,8 +588,8 @@ def get_samplers():
 
     return gr.update(choices=samplers)
 
-def ui():
 
+def ui():
     # Gradio elements
     # gr.Markdown('### Stable Diffusion API Pictures') # Currently the name of extension is shown as the title
     with gr.Accordion("Parameters", open=True):
@@ -621,7 +630,7 @@ def ui():
                     height = gr.Slider(64, 2048, value=params['height'], step=64, label='Height')
                 with gr.Column():
                     with gr.Row():
-                        sampler_name = gr.Dropdown(value=params['sampler_name'],allow_custom_value=True,label='Sampling method', elem_id="sampler_box")
+                        sampler_name = gr.Dropdown(value=params['sampler_name'], allow_custom_value=True, label='Sampling method', elem_id="sampler_box")
                         update_samplers = gr.Button("Get samplers")
                     steps = gr.Slider(1, 150, value=params['steps'], step=1, label="Sampling steps")
             with gr.Row():
@@ -631,9 +640,9 @@ def ui():
                     restore_faces = gr.Checkbox(value=params['restore_faces'], label='Restore faces')
                     enable_hr = gr.Checkbox(value=params['enable_hr'], label='Hires. fix')
             with gr.Row(visible=params['enable_hr'], elem_classes="hires_opts") as hr_options:
-                    hr_scale = gr.Slider(1, 4, value=params['hr_scale'], step=0.1, label='Upscale by')
-                    denoising_strength = gr.Slider(0, 1, value=params['denoising_strength'], step=0.01, label='Denoising strength')
-                    hr_upscaler = gr.Textbox(placeholder=params['hr_upscaler'], value=params['hr_upscaler'], label='Upscaler')
+                hr_scale = gr.Slider(1, 4, value=params['hr_scale'], step=0.1, label='Upscale by')
+                denoising_strength = gr.Slider(0, 1, value=params['denoising_strength'], step=0.01, label='Denoising strength')
+                hr_upscaler = gr.Textbox(placeholder=params['hr_upscaler'], value=params['hr_upscaler'], label='Upscaler')
 
     # Event functions to update the parameters in the backend
     address.change(lambda x: params.update({"address": filter_address(x)}), address, None)
