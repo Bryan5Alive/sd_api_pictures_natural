@@ -16,13 +16,27 @@ Load it in the `--chat` mode with `--extension sd_api_pictures_tag_injection`.
 
 The image generation is triggered either:  
 - manually through the 'Force the picture response' button while in `Manual` or `Immersive/Interactive` modes OR  
-- automatically in `Immersive/Interactive` mode if the words `'send|main|message|me'` are followed by `'image|pic|picture|photo|snap|snapshot|selfie|meme'` in the user's prompt  
+- automatically in `Immersive/Interactive Input` mode if the words `'send|main|message|me'` are followed by `'image|pic|picture|photo|snap|snapshot|selfie|meme'` in the user's prompt  
+- automatically in `Immersive/Interactive Output` mode when the bot sends a picture 
 - always on in Picturebook/Adventure mode (if not currently suppressed by 'Suppress the picture response')  
 
 ## Prerequisites
 
 One needs an available instance of Automatic1111's webui running with an `--api` flag. Ain't tested with a notebook / cloud hosted one but should be possible.   
 To run it locally in parallel on the same machine, specify custom `--listen-port` for either Auto1111's or ooba's webUIs.  
+
+For `Immersive/Interactive Output` mode the mode must be `chat-instruct` and you must provide a `Custom system message` that teaches the bot the image format (`<photo subject="..." focus="..." description="...">`), for example:
+```
+Always use this template when sending any photo or selfie: <photo subject="<?= $subject ?>" focus="<?= $focus ?>" description="<?= $description ?>">
+$description must be an objective, non-narrative visual description of the contents, lighting, angle, and mood of the photo.
+$subject must be the subject of the photo, for example, "me" or "a girl" or "a woman".
+When $subject is a person $description must visually describe their facial expression and every article of their outfit including upper body, lower body and shoes. 
+$focus must be the focus point of the photo, for example, "face" or "body" or "eyes" or "coffee mug".
+Output example (change this to accurately reflect the unique aspects of each photo): <photo subject="a woman" focus="back" description="back view, long wavy brunette hair, gold hoop earrings visible, navy blue backless dress, holding a straw hat in her right hand, light brown sandals, walking on a sandy beach, sea waves in the near distance, spring evening sun casting warm light, relaxed and tranquil mood, shot from a low angle">
+Output must be a valid XML element called "photo" with the attributes "subject and "description".
+Never send photos of more than one person.
+```
+These instructions work well for the few models I've experimented with, but they may need to be tweaked depending on the model.
 
 ## Features:
 - Dynamic injection of content into SD prompt upon detection of a preset "translation" string  
