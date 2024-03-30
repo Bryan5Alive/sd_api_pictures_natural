@@ -3,9 +3,9 @@
 TL;DR: Lets the bot answer you with a picture!
 
 This is a different approach building on the work from the following extensions:
-https://github.com/GuizzyQC/sd_api_pictures_tag_injection.git
-https://github.com/Brawlence/SD_api_pics
-https://github.com/oobabooga/text-generation-webui
+- https://github.com/GuizzyQC/sd_api_pictures_tag_injection.git
+- https://github.com/Brawlence/SD_api_pics
+- https://github.com/oobabooga/text-generation-webui
 
 The basic idea is that we can teach the bot a photo format to send via text, parse that format and send it as a prompt
 to SD WebUI.
