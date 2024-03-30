@@ -3,12 +3,12 @@
 TL;DR: Lets the bot answer you with a picture!
 
 This is a different approach building on the work from the following extensions:
+
 - https://github.com/GuizzyQC/sd_api_pictures_tag_injection.git
 - https://github.com/Brawlence/SD_api_pics
 - https://github.com/oobabooga/text-generation-webui
 
-The basic idea is that we can teach the bot a photo format to send via text, parse that format and send it as a prompt
-to SD WebUI.
+The basic idea is that we can teach the bot a photo format to send via text, parse that format and send it as a prompt  to SD WebUI.
 
 ## Installation
 
@@ -44,40 +44,33 @@ Output example (change this for each photo): <photo description="an old witch we
 Output must be a valid self-closing XML element called "photo" with the attribute "description".
 ```
 
-These instructions work well for the few models I've experimented with (**solar-10.7b-instruct-v1.0**), but they may
-need to
-be tweaked depending on the model.
+These instructions work well for the few models I've experimented with (**solar-10.7b-instruct-v1.0**), but they may need to be tweaked depending on the model.
 
-The XML attributes will be mapped to the strings in your `Positive prompt template` which defaults
-to `{{personName}}, {{description}}`.
+The XML attributes will be mapped to the strings in your `Positive prompt template` which defaults to `{{positivePrompt}}, {{description}}`.
 
 ### Advanced bot instructions
 
-You are not limited to the XML format and Custom system message above. **You can instruct the bot to add any attributes
-you want.** They will be parsed out and injected into the `Positive prompt template` which you can customize.
+You are not limited to the XML format and Custom system message above. **You can instruct the bot to add any attributes you want.** They will be parsed out and injected into the `Positive prompt template` which you can customize.
 
-For example, you could add `personClothing` to the xml and instructions above like so:
+For example, you could add `personName` and `personClothing` to the xml and instructions above like so:
 
 ```
 Always use this template when sending any photo: <photo personName="{{personName}}" personClothing="{{personClothing}}" description="{{photoDescription}}"/>
+personName must be the name of the person in the photo.
 personClothing must visually describe the clothing of the person in the photo.
 ```
 
-Then you can simply change `Positive prompt template` to `{{personName}}, {{personClothing}}, {{description}}`.
+Then you can simply change `Positive prompt template` to `{{positivePrompt}}, {{personName}}, {{personClothing}}, {{description}}`.
 
 This is valuable for adding weights to certain aspects of the photo.
 
-For example, you could increase the weight of the clothing description by changing `Positive prompt template`
-to `{{personName}}, ({{personClothing}}:2), {{description}}`.
+For example, you could increase the weight of the clothing description by changing `Positive prompt template` to `{{positivePrompt}}, {{personName}}, ({{personClothing}}:2), {{description}}`.
 
-Note: You can completely remove the `description` attribute and replace it with other attributes, however,
-the `personName` attribute is used to trigger SD Character tags (see below) so it is required if you want to use them.
+Note: You can completely remove the `description` attribute and replace it with other attributes, however, the `personName` attribute is used to trigger SD Character tags (see below) so it is required if you want to use them. The `positivePrompt` attribute is where your **Positive prompt** field will be injected.
 
 ### Activate SD character tags
 
-In immersive mode, to help your character maintain a better fixed image, add sd_tags_positive and sd_tags_negative to
-your character's json file to have Stable Diffusion tags that define their appearance automatically added to Stable
-Diffusion prompts whenever the extension detects the character was asked to send a picture of itself, ex:
+In immersive mode, to help your character maintain a better fixed image, add sd_tags_positive and sd_tags_negative to your character's json file to have Stable Diffusion tags that define their appearance automatically added to Stable Diffusion prompts whenever the extension detects the character was asked to send a picture of itself, ex:
 
 JSON:
 
@@ -101,10 +94,7 @@ The tags can also include Stable Diffusion LORAs if you have any that are releva
 
 #### General translation patterns
 
-Whenever the Activate SD translations box is checked, the extension will load the translations.json file when a picture
-is requested, and will check in both the request to the language model, as well as the response of the language model,
-for specific words listed in the translations.json file and will add words or tags to the Stable Diffusion prompt
-accordingly, ex:
+Whenever the Activate SD translations box is checked, the extension will load the translations.json file when a picture is requested, and will check in both the request to the language model, as well as the response of the language model, for specific words listed in the translations.json file and will add words or tags to the Stable Diffusion prompt accordingly, ex:
 
 JSON:
 
@@ -134,10 +124,7 @@ The tags can also include Stable Diffusion LORAs if you have any that are releva
 
 #### Character specific translation patterns
 
-If you have translations that you only want to see added for a specific character (for instance, if a specific character
-has specific clothes or uniforms or physical characteristics that you only want to see triggered when specific words are
-used), add the translations_patterns heading in your character's JSON or YAML file. The *translations_patterns* heading
-works exactly the same way as the *pairs* heading does in the translations.json file.
+If you have translations that you only want to see added for a specific character (for instance, if a specific character has specific clothes or uniforms or physical characteristics that you only want to see triggered when specific words are used), add the translations_patterns heading in your character's JSON or YAML file. The *translations_patterns* heading works exactly the same way as the *pairs* heading does in the translations.json file.
 
 JSON:
 
@@ -182,9 +169,7 @@ Note: Character specific translation patterns stack with the general translation
 
 ### Checkpoint file Stable Diffusion tags
 
-If the "Add checkpoint tags in prompt" option is selected, if the checkpoint you loaded matches one in the
-checkpoints.json file it will add the relevant tags to your prompt. The format for the checkpoints.json file is as
-follow:
+If the "Add checkpoint tags in prompt" option is selected, if the checkpoint you loaded matches one in the checkpoints.json file it will add the relevant tags to your prompt. The format for the checkpoints.json file is as follow:
 
 JSON:
 
@@ -207,8 +192,7 @@ JSON:
 
 ### Persistent settings
 
-Create or modify the `settings.yaml` in the `text-generation-webui` root directory to override the defaults present in
-script.py, ex:
+Create or modify the `settings.yaml` in the `text-generation-webui` root directory to override the defaults present in script.py, ex:
 
 YAML:
 

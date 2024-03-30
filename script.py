@@ -38,7 +38,7 @@ params = {
     'translations': False,
     'checkpoint_prompt': False,
     'character_tags': False,
-    'positive_prompt_template': '{{personName}}, {{description}}',
+    'positive_prompt_template': '{{positivePrompt}}, {{description}}',
 }
 
 EXTENSION_PATH = 'extensions/sd_api_pictures_natural'
