@@ -1,0 +1,19 @@
+{
+  "pairs": [
+    {
+      "descriptive_word": [
+        "tennis"
+      ],
+      "sd_positive_translation": "tennis ball, rackets, (net)",
+      "sd_negative_translation": ""
+    },
+    {
+      "descriptive_word": [
+        "soccer",
+        "football"
+      ],
+      "sd_positive_translation": "((soccer)), nets",
+      "sd_negative_translation": ""
+    }
+  ]
+}

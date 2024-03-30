@@ -3,13 +3,12 @@ import html
 import io
 import json
 import re
-import string
 import time
-from datetime import date
+import xml.etree.ElementTree as ET
+from datetime import date, datetime
 from pathlib import Path
 
 import gradio as gr
-import modules.shared as shared
 import requests
 import torch
 import yaml
@@ -18,15 +17,13 @@ from PIL import Image
 
 torch._C._jit_set_profiling_mode(False)
 
-# parameters which can be customized in settings.json of webui
+# Parameters which can be customized in settings.json (or settings.yaml) of WebUI
 params = {
     'address': 'http://127.0.0.1:7860',
-    'mode': 0,  # modes of operation: 0 (Manual only), 1 (Immersive/Interactive - looks for words to trigger), 2 (Picturebook Adventure - Always on)
-    'manage_VRAM': False,
+    'manage_vram': False,
     'save_img': False,
-    'SD_model': 'NeverEndingDream',  # not used right now
-    'prompt_prefix': '(Masterpiece:1.1), detailed, intricate, colorful',
-    'negative_prompt': '(worst quality, low quality:1.3)',
+    'positive_prompt': '',
+    'negative_prompt': '',
     'width': 512,
     'height': 512,
     'denoising_strength': 0.61,
@@ -38,23 +35,17 @@ params = {
     'sampler_name': 'DDIM',
     'steps': 32,
     'cfg_scale': 7,
-    'secondary_prompt': False,
     'translations': False,
     'checkpoint_prompt': False,
-    'processing': False,
-    'disable_loras': False,
-    'description_weight': '1',
-    'subject_weight': '0',
-    'initial_weight': '0',
-    'secondary_negative_prompt': '',
-    'secondary_positive_prompt': '',
-    'showDescription': True,
-    'yourMatches': 'face, eyes, outfit'
+    'character_tags': False,
+    'positive_prompt_template': '{{personName}}, {{description}}',
 }
 
+EXTENSION_PATH = 'extensions/sd_api_pictures_natural'
 
-def give_VRAM_priority(actor):
-    global shared, params
+
+def give_vram_priority(actor):
+    global params
 
     if actor == 'SD':
         unload_model()
@@ -69,12 +60,12 @@ def give_VRAM_priority(actor):
         reload_model()
 
     elif actor == 'set':
-        print('VRAM mangement activated -- requesting Auto1111 to vacate VRAM...')
+        print('VRAM management activated -- requesting Auto1111 to vacate VRAM...')
         response = requests.post(url=f'{params["address"]}/sdapi/v1/unload-checkpoint', json='')
         response.raise_for_status()
 
     elif actor == 'reset':
-        print('VRAM mangement deactivated -- requesting Auto1111 to reload checkpoint')
+        print('VRAM management deactivated -- requesting Auto1111 to reload checkpoint...')
         response = requests.post(url=f'{params["address"]}/sdapi/v1/reload-checkpoint', json='')
         response.raise_for_status()
 
@@ -85,352 +76,48 @@ def give_VRAM_priority(actor):
     del response
 
 
-if params['manage_VRAM']:
-    give_VRAM_priority('set')
+if params['manage_vram']:
+    give_vram_priority('set')
 
-characterFocus = ''
 positive_suffix = ''
 negative_suffix = ''
+characterFocus = False
+character = 'None'
 a1111Status = {
     'sd_checkpoint': '',
     'checkpoint_positive_prompt': '',
     'checkpoint_negative_prompt': ''
 }
 checkpoint_list = []
-samplers = ['DDIM', 'DPM++ 2M Karras']
-SD_models = ['NeverEndingDream']
-initial_input_text = ''
-
-picture_response = False
 
 
-def add_translations(description, triggered_array, tpatterns):
-    global positive_suffix, negative_suffix
-    i = 0
-    for word_pair in tpatterns['pairs']:
-        if triggered_array[i] != 1:
-            if any(target.lower() in description.lower() for target in word_pair['descriptive_word']):
-                positive_suffix = positive_suffix + ', ' + word_pair['SD_positive_translation']
-                negative_suffix = negative_suffix + ', ' + word_pair['SD_negative_translation']
-                triggered_array[i] = 1
-        i = i + 1
-    return triggered_array
-
-
-def remove_surrounded_chars(string):
-    # this expression matches to 'as few symbols as possible (0 upwards) between any asterisks' OR
-    # 'as few symbols as possible (0 upwards) between an asterisk and the end of the string'
-    return re.sub('\*[^\*]*?(\*|$)', '', string)
-
-
-def parse_input(input_string):
-    global characterFocus, subject, params
-    characterFocus = False
-    subject = ''
-
-    instructions = "as if describing to a crime scene sketch artist, exhaustively detail only the key visual qualities of "
-    extra_instructions = 'hyper focus only on key visual details. be extremely objective. be extremely literal. be extremely direct. use absolutely no narrative.'
-
-    result = None
-
-    your_list = re.split(r'\s*,\s*', params['yourMatches'])
-
-    input_string_lower = input_string.lower()
-
-    # Case 1. Format: show me
-    if match := re.search(r'(?aims)\s*\b(show)\b\s*\b(me)\b\s*', input_string_lower):
-        end = match.end(0)
-        your_match = re.search(r'(?aims)^\b(your)\b\s+(\w+)(?:\s+(\w+))?', input_string_lower[end:])
-
-        prompt_subject = input_string_lower[end:].strip(string.punctuation).strip()
-
-        if prompt_subject == '':
-            prompt_subject = 'it'
-
-        if your_match:
-            possessive = your_match.group(2) and '\'' in your_match.group(2)
-            characterFocus = not possessive and (your_match.group(2) in your_list or your_match.group(3) in your_list)
-
-        result = instructions + prompt_subject + '. '
-
-    elif match := re.search(r'(?aims)\b(send)\b.*\b(pic|picture|photo|image)\b\s*((of)\b\s*)?', input_string_lower):
-        end = match.end(0)
-        ends_with_match = re.search(r'(?aims)^\b(you|yourself)\b\s*(.*)', input_string_lower[end:])
-        your_match = re.search(r'(?aims)^\b(your)\b\s+(\w+)(?:\s+(\w+))?', input_string_lower[end:])
-
-        prompt_subject = input_string_lower[end:].strip(string.punctuation).strip()
-
-        if prompt_subject == '':
-            prompt_subject = 'it'
-
-        if your_match:
-            possessive = your_match.group(2) and '\'' in your_match.group(2)
-            characterFocus = not possessive and (your_match.group(2) in your_list or your_match.group(3) in your_list)
-
-        if ends_with_match:
-            characterFocus = True
-            if not ends_with_match.group(2):
-                prompt_subject = 'what you\'re doing at this moment'
-
-        result = instructions + prompt_subject + '. '
-
-    elif match := re.search(r'(?aims)\b(send)\b.*\b(selfie)\b', input_string_lower.lower()):
-        characterFocus = True
-        prompt_subject = 'what you\'re doing at this moment'
-
-        result = instructions + prompt_subject + '. '
-
-    if match:
-        start = match.start(0)
-        starts_with_match = re.search(r'(?aims)\b(and|then)\b\s', input_string_lower[:start])
-        if starts_with_match:
-            result = input_string_lower[:starts_with_match.end(0)] + result
-
-    if result:
-        toggle_generation(True)
-        result += extra_instructions
-        print(result, characterFocus)
-        return result
-
-    return input_string_lower
-
-
-def input_modifier(text, state):
-    global initial_input_text, characterFocus, params
-    initial_input_text = text
-    characterFocus = False
-
-    if params['mode'] == 1:
-        result_text = parse_input(text)
-        global picture_response
-        if picture_response:
-            state['stream'] = False
-        return result_text
-
-    return text
-
-
-def create_suffix():
-    global params, positive_suffix, negative_suffix, characterFocus
-    positive_suffix = ''
-    negative_suffix = ''
-
-    # load character data from json, yaml, or yml file
-    if character != 'None':
+def load_character_data(character_name):
+    if character != 'none':
         found_file = False
         folder1 = 'characters'
         folder2 = 'characters/instruction-following'
         for folder in [folder1, folder2]:
             for extension in ['yml', 'yaml', 'json']:
-                filepath = Path(f'{folder}/{character}.{extension}')
+                filepath = Path(f'{folder}/{character_name}.{extension}')
                 if filepath.exists():
                     found_file = True
                     break
             if found_file:
                 break
         file_contents = open(filepath, 'r', encoding='utf-8').read()
-        data = json.loads(file_contents) if extension == 'json' else yaml.safe_load(file_contents)
-
-    if params['secondary_prompt']:
-        positive_suffix = params['secondary_positive_prompt']
-        negative_suffix = params['secondary_negative_prompt']
-    if params['checkpoint_prompt']:
-        if params['secondary_prompt']:
-            positive_suffix = positive_suffix + ', ' + a1111Status['checkpoint_positive_prompt']
-            negative_suffix = negative_suffix + ', ' + a1111Status['checkpoint_negative_prompt']
-        else:
-            positive_suffix = a1111Status['checkpoint_positive_prompt']
-            negative_suffix = a1111Status['checkpoint_negative_prompt']
-    if characterFocus and character != 'None':
-        positive_suffix = data['sd_tags_positive'] if 'sd_tags_positive' in data else ''
-        negative_suffix = data['sd_tags_negative'] if 'sd_tags_negative' in data else ''
-        if params['secondary_prompt']:
-            positive_suffix = params['secondary_positive_prompt'] + ', ' + data['sd_tags_positive'] if 'sd_tags_positive' in data else params['secondary_positive_prompt']
-            negative_suffix = params['secondary_negative_prompt'] + ', ' + data['sd_tags_negative'] if 'sd_tags_negative' in data else params['secondary_negative_prompt']
-        if params['checkpoint_prompt']:
-            positive_suffix = positive_suffix + ', ' + a1111Status['checkpoint_positive_prompt'] if 'checkpoint_positive_prompt' in a1111Status else positive_suffix
-            negative_suffix = negative_suffix + ', ' + a1111Status['checkpoint_negative_prompt'] if 'checkpoint_negative_prompt' in a1111Status else negative_suffix
+        return json.loads(file_contents) if extension == 'json' else yaml.safe_load(file_contents)
+    return {}
 
 
-def clean_spaces(text):  # Cleanup double spaces, double commas, and comma-space-comma as these are all meaningless to us and interfere with splitting up tags
-    while any([', ,' in text, ',,' in text, '  ' in text]):
-        text = text.replace(', ,', ',')
-        text = text.replace(',,', ',')
-        text = text.replace('  ', ' ')
-    try:
-        while any([text[0] == ' ', text[0] == ',']):  # Cleanup leading spaces and commas, trailing spaces and commas
-            if text[0] == ' ':
-                text = text.replace(' ', '', 1)
-            if text[0] == ',':
-                text = text.replace(',', '', 1)
-        while any([text[len(text) - 1] == ' ', text[len(text) - 1] == ',']):
-            if text[len(text) - 1] == ' ':
-                text = text[::-1].replace(' ', '', 1)[::-1]
-            if text[len(text) - 1] == ',':
-                text = text[::-1].replace(',', '', 1)[::-1]
-    except IndexError:  # IndexError is expected if string is empty or becomes empty during cleanup and can be safely ignored
-        pass
-    except:
-        print('Error cleaning up text')
-    return text
+def get_sd_pictures(positive_prompt, negative_prompt):
+    global params
 
-
-def tag_calculator(affix):
-    string_tags = affix
-    affix = affix.replace(', ', ',')
-    affix = affix.replace(' ,', ',')
-    tags = affix.split(',')
-
-    if params['processing'] == False:  # A simple processor that removes exact duplicates (does not remove duplicates with different weights)
-        string_tags = ''
-        unique = []
-        for tag in tags:
-            if tag not in unique:
-                unique.append(tag)
-        for tag in unique:
-            string_tags += ', ' + tag
-
-    if params['processing'] == True:  # A smarter processor that calculates resulting tags from multiple tags
-        string_tags = ''
-
-        class tag_objects:  # Tags have three characteristics, their text, their type and their weight. The type distinguishes between simple tags without parenthesis, LORAs and weighted tags
-            def __init__(self, text, tag_type, weight):
-                self.text = text
-                self.tag_type = tag_type
-                self.weight = float(weight)
-
-        initial_tags = []
-
-        for tag in tags:  # Create an array of all tags as objects. Use the first character in the tag to distinguish the type
-            if tag:
-                if tag[0] != '(' and tag[0] != '<':
-                    initial_tags.append(tag_objects(tag, 'simple', 1.0))  # Simple tags start with neither a ( or a < and are assigned a weight of one
-                if tag[0] == '<':
-                    pattern = r'.*?\:(.*):(.*)\>.*'
-                    match = re.search(pattern, tag)
-                    initial_tags.append(tag_objects(match.group(1), 'lora', match.group(2)))  # LORAs start with a < and have their own weight indicated with them
-                if tag[0] == '(':
-                    if ':' in tag:
-                        pattern = r'\((.*)\:(.*)\).*'
-                        match = re.search(pattern, tag)
-                        initial_tags.append(tag_objects(match.group(1), 'weighted', match.group(2)))  # Weighted tags start with a ( and their weight can be indicated after a :
-                    else:
-                        pattern = r'\((.*)\).*'
-                        match = re.search(pattern, tag)
-                        initial_tags.append(tag_objects(match.group(1), 'weighted', 1.2))  # Weighted tags sometimes don't have a weight indicated, in these cases I have assigned them an arbitrary weight of 1.2
-
-        unique = []
-
-        for tag in initial_tags:  # Remove duplicate simple tags without parenthesis, increase weight according to repetition, convert them to weighted tags and put them back into the array so they can later be processed again as weighted tags
-            if tag.tag_type == 'simple':
-                if any(x.text == tag.text for x in unique):
-                    for matched_tag in unique:
-                        if matched_tag.text == tag.text:
-                            resulting_weight = matched_tag.weight + 0.1
-                            matched_tag.weight = float(resulting_weight)
-                else:
-                    unique.append(tag_objects(tag.text, 'weighted', tag.weight))
-        initial_tags = initial_tags + unique
-
-        loras = []
-
-        for tag in initial_tags:  # Remove duplicate LORAs, keep only highest weight found and put them into a separate array
-            if tag.tag_type == 'lora':
-                if any(x.text == tag.text for x in loras):
-                    for matched_tag in loras:
-                        if matched_tag.text == tag.text:
-                            if tag.weight > matched_tag.weight:
-                                matched_tag.weight = float(tag.weight)
-                else:
-                    loras.append(tag_objects(tag.text, 'lora', tag.weight))
-
-        final_tags = []
-
-        for tag in initial_tags:  # Remove duplicate weighted tags and calculate final tag weight (including converted simple tags) and the unique ones with their final weight in a separate array
-            if tag.tag_type == 'weighted':
-                if any(x.text == tag.text for x in final_tags):
-                    for matched_tag in final_tags:
-                        if matched_tag.text == tag.text:
-                            if tag.weight == 1.0:
-                                resulting_weight = matched_tag.weight + 0.1
-                            else:
-                                resulting_weight = matched_tag.weight + (tag.weight - 1)
-                            matched_tag.weight = float(resulting_weight)
-                else:
-                    final_tags.append(tag_objects(tag.text, tag.tag_type, tag.weight))
-
-        for tag in final_tags:  # Construct a string from the finalized unique weighted tags and the unique LORAs to pass to the payload
-            if tag.weight == 1.0:
-                string_tags += tag.text + ', '
-            else:
-                if tag.weight > 0:
-                    string_tags += '(' + tag.text + ':' + str(round(tag.weight, 1)) + '), '
-
-        if not params['disable_loras']:
-            for tag in loras:
-                string_tags += '<lora:' + tag.text + ':' + str(round(tag.weight, 1)) + '>, '
-
-    return string_tags
-
-
-def build_body(description, subject, original):
-    response = ''
-    if all([description, float(params['description_weight']) != 0]):
-        if float(params['description_weight']) == 1:
-            response = description + ', '
-        else:
-            response = '(' + description + ':' + str(params['description_weight']) + '), '
-    if all([subject, float(params['subject_weight']) != 0]):
-        if float(params['subject_weight']) == 1:
-            response += subject + ', '
-        else:
-            response += '(' + subject + ':' + str(params['subject_weight']) + '), '
-    if all([original, float(params['initial_weight']) != 0]):
-        if float(params['initial_weight']) == 1:
-            response += original + ', '
-        else:
-            response += '(' + original + ':' + str(params['initial_weight']) + '), '
-    return response
-
-
-# Get and save the Stable Diffusion-generated picture
-def get_SD_pictures(description):
-    global subject, params, initial_input_text
-
-    if subject is None:
-        subject = ''
-
-    if params['manage_VRAM']:
-        give_VRAM_priority('SD')
-
-    create_suffix()
-    if params['translations']:
-        tpatterns = json.loads(open(Path(f'extensions/sd_api_pictures_tag_injection/translations.json'), 'r', encoding='utf-8').read())
-        if character != 'None':
-            found_file = False
-            folder1 = 'characters'
-            folder2 = 'characters/instruction-following'
-            for folder in [folder1, folder2]:
-                for extension in ['yml', 'yaml', 'json']:
-                    filepath = Path(f'{folder}/{character}.{extension}')
-                    if filepath.exists():
-                        found_file = True
-                        break
-                if found_file:
-                    break
-            file_contents = open(filepath, 'r', encoding='utf-8').read()
-            data = json.loads(file_contents) if extension == 'json' else yaml.safe_load(file_contents)
-            tpatterns['pairs'] = tpatterns['pairs'] + data['translation_patterns'] if 'translation_patterns' in data else tpatterns['pairs']
-        triggered_array = [0] * len(tpatterns['pairs'])
-        triggered_array = add_translations(initial_input_text, triggered_array, tpatterns)
-        add_translations(description, triggered_array, tpatterns)
-
-    final_positive_prompt = html.unescape(clean_spaces(tag_calculator(clean_spaces(params['prompt_prefix'])) + ', ' + build_body(description, subject, initial_input_text) + tag_calculator(clean_spaces(positive_suffix))))
-    final_negative_prompt = html.unescape(clean_spaces(tag_calculator(clean_spaces(params['negative_prompt'])) + ', ' + tag_calculator(clean_spaces(negative_suffix))))
+    if params['manage_vram']:
+        give_vram_priority('SD')
 
     payload = {
-        'prompt': final_positive_prompt,
-        'negative_prompt': final_negative_prompt,
+        'prompt': positive_prompt,
+        'negative_prompt': negative_prompt,
         'seed': params['seed'],
         'sampler_name': params['sampler_name'],
         'enable_hr': params['enable_hr'],
@@ -456,64 +143,128 @@ def get_SD_pictures(description):
             img_data = base64.b64decode(img_str)
 
             variadic = f'{date.today().strftime("%Y_%m_%d")}/{character}_{int(time.time())}'
-            output_file = Path(f'extensions/sd_api_pictures_tag_injection/outputs/{variadic}.png')
+            output_file = Path(f'{EXTENSION_PATH}/outputs/{variadic}.png')
             output_file.parent.mkdir(parents=True, exist_ok=True)
 
             with open(output_file.as_posix(), 'wb') as f:
                 f.write(img_data)
 
-            visible_result = visible_result + f'<img src="/file/extensions/sd_api_pictures_tag_injection/outputs/{variadic}.png" alt="{description}" style="max-width: unset; max-height: unset;">\n'
+            visible_result = visible_result + f'<img src="/file/{EXTENSION_PATH}/outputs/{variadic}.png" style="max-width: unset; max-height: unset;">\n'
         else:
             image = Image.open(io.BytesIO(base64.b64decode(img_str.split(',', 1)[0])))
-            # lower the resolution of received images for the chat, otherwise the log size gets out of control quickly with all the base64 values in visible history
             image.thumbnail((300, 300))
             buffered = io.BytesIO()
             image.save(buffered, format='JPEG')
             buffered.seek(0)
             image_bytes = buffered.getvalue()
             img_str = 'data:image/jpeg;base64,' + base64.b64encode(image_bytes).decode()
-            visible_result = visible_result + f'<img src="{img_str}" alt="{description}">\n'
+            visible_result = visible_result + f'<img src="{img_str}" style="max-width: unset; max-height: unset;">\n'
 
-    if params['manage_VRAM']:
-        give_VRAM_priority('LLM')
+    if params['manage_vram']:
+        give_vram_priority('LLM')
 
     return visible_result
 
 
+def prompt_from_template(template, photo_element):
+    segments = template.split(',')
+    pattern = r'\{\{(\w+)\}\}'
+    valid_segments = []
+
+    for segment in segments:
+        placeholders = re.findall(pattern, segment)
+        if placeholders:
+            all_placeholders_valid = all(photo_element.attrib.get(placeholder) or placeholder == 'positivePrompt' for placeholder in placeholders)
+
+            if all_placeholders_valid:
+                for placeholder in placeholders:
+                    xml_value = photo_element.attrib.get(placeholder)
+                    if xml_value:
+                        segment = segment.replace(f'{{{{{placeholder}}}}}', xml_value)
+                valid_segments.append(segment.strip())
+        else:
+            valid_segments.append(segment.strip())
+
+    return ', '.join(valid_segments)
+
+
 def parse_output(output_string):
+    print('\n\n*** output_string:\n' + html.unescape(output_string) + '\n\n')
+
+    global characterFocus, character, positive_suffix, negative_suffix
+
     output_string_unescaped = html.unescape(output_string)
 
-    global subject, character, characterFocus
-    subject = ''
+    positive_suffix = ''
+    negative_suffix = ''
 
-    pattern = r'(?aims)<photo subject="([^"]+)" focus="([^"]+)" description="([^"]+)"\s*\/?\s*>(.*?</photo>)?'
+    pattern = r'(?aims)(<photo.*?\/?>)(.*?</photo>)?'
 
     result = ''
     remaining_text = output_string_unescaped
     while True:
         match = re.search(pattern, remaining_text)
 
-        if not match:
+        if not match or not match.group(1):
             result += html.escape(remaining_text)
             break
 
         start, end = match.start(0), match.end(0)
 
-        if not match.group(3):
-            result += html.escape(remaining_text[:start]) + '[Error]'
+        try:
+            photo_string = match.group(1)
+            photo_element = ET.fromstring(photo_string + '</photo>' if not photo_string.endswith('/>') else photo_string)
+        except:
+            result += html.escape(remaining_text[:start]) + '[Error decoding image]'
             remaining_text = remaining_text[end:]
             continue
 
-        photo_subject = match.group(1).strip()
-        photo_focal = match.group(2).strip()
-        photo_description = match.group(3).strip()
-        prompt = f"(focus on {photo_focal}:3), {photo_description}"
+        positive_prompt = prompt_from_template(params['positive_prompt_template'], photo_element)
+        positive_prompt = positive_prompt.replace('{{positivePrompt}}', params['positive_prompt'])
+        negative_prompt = params['negative_prompt']
 
-        characterFocus = photo_subject == 'me' or character in photo_subject
-        if not characterFocus:
-            prompt = f"({photo_subject}), {prompt}"
+        character_data = load_character_data(character)
 
-        image = get_SD_pictures(prompt)
+        photo_person_name = photo_element.attrib.get('personName', '').lower()
+
+        if params['character_tags'] and photo_person_name:
+            characterFocus = character != 'none' and (photo_person_name == 'me' or character in photo_person_name)
+            if characterFocus:
+                positive_suffix = character_data.get('sd_tags_positive', '')
+                negative_suffix = character_data.get('sd_tags_negative', '')
+
+        if params['translations']:
+            translations_path = Path(f'{EXTENSION_PATH}/translations.json')
+            if translations_path.exists():
+                with translations_path.open('r', encoding='utf-8') as file:
+                    translations_data = json.load(file)
+            else:
+                translations_data = {'pairs': []}
+            translations_data['pairs'] += character_data.get('translation_patterns', [])
+            triggered_array = [0] * len(translations_data['pairs'])
+            for i, word_pair in enumerate(translations_data['pairs']):
+                if triggered_array[i] != 1:
+                    is_descriptive_word_present = False
+                    for descriptive_word in word_pair['descriptive_word']:
+                        if (descriptive_word.lower() in positive_prompt) or (descriptive_word.lower() in photo_person_name):
+                            is_descriptive_word_present = True
+                            break
+                    if is_descriptive_word_present:
+                        positive_suffix += ', ' + word_pair['sd_positive_translation']
+                        negative_suffix += ', ' + word_pair['sd_negative_translation']
+                        triggered_array[i] = 1
+
+        if params['checkpoint_prompt']:
+            positive_suffix += ', ' + a1111Status['checkpoint_positive_prompt']
+            negative_suffix += ', ' + a1111Status['checkpoint_negative_prompt']
+
+        final_positive_prompt = html.unescape(positive_prompt + ', ' + positive_suffix)
+        final_negative_prompt = html.unescape(negative_prompt + ', ' + negative_suffix)
+
+        print('\n\n*** final_positive_prompt:\n' + html.unescape(final_positive_prompt) + '\n\n')
+        print('\n\n*** final_negative_prompt:\n' + html.unescape(final_negative_prompt) + '\n\n')
+
+        image = get_sd_pictures(final_positive_prompt, final_negative_prompt)
 
         result += html.escape(remaining_text[:start]) + image
         remaining_text = remaining_text[end:]
@@ -522,55 +273,28 @@ def parse_output(output_string):
 
 
 def output_modifier(text, state):
-    global params, picture_response
-
-    if not picture_response and params['mode'] != 2:
-        return text
-
     global character
-    character = state.get('character_menu', 'None')
+    character = state.get('character_menu', 'none').lower()
 
     if text == '':
-        return 'No viable description in reply, try regenerating.'
+        return '[Error decoding message]'
 
-    if params['mode'] == 2:
-        return parse_output(text)
-    else:
-        prompt = text
-        image = get_SD_pictures(prompt)
-        if params['mode'] == 3:
-            toggle_generation(False)
-            description = f'*Sends a picture which portrays: “{text}”*'
-        else:
-            description = text
-        return image + '\n' + description if params['showDescription'] else image
+    return parse_output(text)
 
 
-def bot_prefix_modifier(string):
+def bot_modifier(string):
     return string
-
-
-def toggle_generation(*args):
-    global picture_response, shared
-
-    if not args:
-        picture_response = not picture_response
-    else:
-        picture_response = args[0]
-
-    shared.processing_message = '*Is sending a picture...*' if picture_response else '*Is typing...*'
 
 
 def filter_address(address):
     address = address.strip()
-    # address = re.sub('http(s)?:\/\/|\/$','',address) # remove starting http:// OR https:// OR trailing slash
-    address = re.sub('\/$', '', address)  # remove trailing /s
+    address = re.sub('/$', '', address)
     if not address.startswith('http'):
         address = 'http://' + address
     return address
 
 
-def SD_api_address_update(address):
+def sd_api_address_update(address):
     global params
 
     msg = '✔️ SD API is found on:'
@@ -579,7 +303,6 @@ def SD_api_address_update(address):
     try:
         response = requests.get(url=f'{params["address"]}/sdapi/v1/sd-models')
         response.raise_for_status()
-        # r = response.json()
     except:
         msg = '❌ No SD API endpoint on:'
 
@@ -606,7 +329,7 @@ def load_checkpoint(checkpoint):
         'sd_model_checkpoint': checkpoint
     }
 
-    prompts = json.loads(open(Path(f'extensions/sd_api_pictures_tag_injection/checkpoints.json'), 'r', encoding='utf-8').read())
+    prompts = json.loads(open(Path(f'{EXTENSION_PATH}/checkpoints.json'), 'r', encoding='utf-8').read())
     for pair in prompts['pairs']:
         if pair['name'] == a1111Status['sd_checkpoint']:
             a1111Status['checkpoint_positive_prompt'] = pair['positive_prompt']
@@ -628,52 +351,35 @@ def get_samplers():
 
 
 def ui():
-    # Gradio elements
-    # gr.Markdown('### Stable Diffusion API Pictures') # Currently the name of extension is shown as the title
     with gr.Accordion('Parameters', open=True):
         with gr.Row():
             address = gr.Textbox(placeholder=params['address'], value=params['address'], label='Auto1111\'s WebUI address')
-            modes_list = ['Manual', 'Immersive/Interactive (Input)', 'Immersive/Interactive (Output)', 'Picturebook/Adventure']
-            mode = gr.Dropdown(modes_list, value=modes_list[params['mode']], allow_custom_value=True, label='Mode of operation', type='index')
             with gr.Column(scale=1, min_width=300):
-                manage_VRAM = gr.Checkbox(value=params['manage_VRAM'], label='Manage VRAM')
+                manage_vram = gr.Checkbox(value=params['manage_vram'], label='Manage VRAM')
                 save_img = gr.Checkbox(value=params['save_img'], label='Keep original images and use them in chat')
-                secondary_prompt = gr.Checkbox(value=params['secondary_prompt'], label='Add secondary tags in prompt')
                 translations = gr.Checkbox(value=params['translations'], label='Activate SD translations')
-                tag_processing = gr.Checkbox(value=params['processing'], label='Advanced tag processing')
-                disable_loras = gr.Checkbox(value=params['disable_loras'], label='Disable SD LORAs')
-            force_pic = gr.Button('Force the picture response')
-            suppr_pic = gr.Button('Suppress the picture response')
+                character_tags = gr.Checkbox(value=params['character_tags'], label='Activate SD character tags')
         with gr.Row():
             checkpoint = gr.Dropdown(checkpoint_list, value=a1111Status['sd_checkpoint'], allow_custom_value=True, label='Checkpoint', type='value')
             checkpoint_prompt = gr.Checkbox(value=params['checkpoint_prompt'], label='Add checkpoint tags in prompt')
             update_checkpoints = gr.Button('Get list of checkpoints')
 
-        with gr.Accordion('Description mixer', open=False):
-            description_weight = gr.Slider(0, 4, value=params['description_weight'], step=0.1, label='LLM Response Weight')
-            subject_weight = gr.Slider(0, 4, value=params['subject_weight'], step=0.1, label='Subject Weight')
-            initial_weight = gr.Slider(0, 4, value=params['initial_weight'], step=0.1, label='Initial Prompt Weight')
-
         with gr.Accordion('Generation parameters', open=False):
-            prompt_prefix = gr.Textbox(placeholder=params['prompt_prefix'], value=params['prompt_prefix'], label='Prompt Prefix (best used to describe the look of the character)')
-            negative_prompt = gr.Textbox(placeholder=params['negative_prompt'], value=params['negative_prompt'], label='Negative Prompt')
-            with gr.Row():
-                with gr.Column():
-                    secondary_positive_prompt = gr.Textbox(placeholder=params['secondary_positive_prompt'], value=params['secondary_positive_prompt'], label='Secondary positive prompt')
-                with gr.Column():
-                    secondary_negative_prompt = gr.Textbox(placeholder=params['secondary_negative_prompt'], value=params['secondary_negative_prompt'], label='Secondary negative prompt')
+            positive_prompt_template = gr.Textbox(placeholder=params['positive_prompt_template'], value=params['positive_prompt_template'], label='Positive prompt template')
+            positive_prompt = gr.Textbox(placeholder=params['positive_prompt'], value=params['positive_prompt'], label='Positive prompt')
+            negative_prompt = gr.Textbox(placeholder=params['negative_prompt'], value=params['negative_prompt'], label='Negative prompt')
             with gr.Row():
                 with gr.Column():
                     width = gr.Slider(64, 2048, value=params['width'], step=64, label='Width')
                     height = gr.Slider(64, 2048, value=params['height'], step=64, label='Height')
                 with gr.Column():
                     with gr.Row():
-                        sampler_name = gr.Dropdown(value=params['sampler_name'], allow_custom_value=True, label='Sampling method', elem_id='sampler_box')
+                        sampler_name = gr.Dropdown(value=params['sampler_name'], allow_custom_value=True, label='Sampling method')
                         update_samplers = gr.Button('Get samplers')
                     steps = gr.Slider(1, 150, value=params['steps'], step=1, label='Sampling steps')
             with gr.Row():
-                seed = gr.Number(label='Seed', value=params['seed'], elem_id='seed_box')
-                cfg_scale = gr.Number(label='CFG Scale', value=params['cfg_scale'], elem_id='cfg_box')
+                seed = gr.Number(label='Seed', value=params['seed'])
+                cfg_scale = gr.Number(label='CFG Scale', value=params['cfg_scale'])
                 with gr.Column() as hr_options:
                     restore_faces = gr.Checkbox(value=params['restore_faces'], label='Restore faces')
                     enable_hr = gr.Checkbox(value=params['enable_hr'], label='Hires. fix')
@@ -682,19 +388,14 @@ def ui():
                 denoising_strength = gr.Slider(0, 1, value=params['denoising_strength'], step=0.01, label='Denoising strength')
                 hr_upscaler = gr.Textbox(placeholder=params['hr_upscaler'], value=params['hr_upscaler'], label='Upscaler')
 
-    # Event functions to update the parameters in the backend
     address.change(lambda x: params.update({'address': filter_address(x)}), address, None)
-    mode.select(lambda x: params.update({'mode': x}), mode, None)
-    mode.select(lambda x: toggle_generation(x > 1), inputs=mode, outputs=None)
-    manage_VRAM.change(lambda x: params.update({'manage_VRAM': x}), manage_VRAM, None)
-    manage_VRAM.change(lambda x: give_VRAM_priority('set' if x else 'reset'), inputs=manage_VRAM, outputs=None)
+    manage_vram.change(lambda x: params.update({'manage_vram': x}), manage_vram, None)
+    manage_vram.change(lambda x: give_vram_priority('set' if x else 'reset'), inputs=manage_vram, outputs=None)
     save_img.change(lambda x: params.update({'save_img': x}), save_img, None)
 
-    address.submit(fn=SD_api_address_update, inputs=address, outputs=address)
-    description_weight.change(lambda x: params.update({'description_weight': x}), description_weight, None)
-    initial_weight.change(lambda x: params.update({'initial_weight': x}), initial_weight, None)
-    subject_weight.change(lambda x: params.update({'subject_weight': x}), subject_weight, None)
-    prompt_prefix.change(lambda x: params.update({'prompt_prefix': x}), prompt_prefix, None)
+    address.submit(fn=sd_api_address_update, inputs=address, outputs=address)
+    positive_prompt_template.change(lambda x: params.update({'positive_prompt_template': x}), positive_prompt_template, None)
+    positive_prompt.change(lambda x: params.update({'positive_prompt': x}), positive_prompt, None)
     negative_prompt.change(lambda x: params.update({'negative_prompt': x}), negative_prompt, None)
     width.change(lambda x: params.update({'width': x}), width, None)
     height.change(lambda x: params.update({'height': x}), height, None)
@@ -704,9 +405,6 @@ def ui():
     hr_upscaler.change(lambda x: params.update({'hr_upscaler': x}), hr_upscaler, None)
     enable_hr.change(lambda x: params.update({'enable_hr': x}), enable_hr, None)
     enable_hr.change(lambda x: hr_options.update(visible=params['enable_hr']), enable_hr, hr_options)
-    tag_processing.change(lambda x: params.update({'processing': x}), tag_processing, None)
-    tag_processing.change(lambda x: disable_loras.update(visible=params['processing']), tag_processing, disable_loras)
-    disable_loras.change(lambda x: params.update({'disable_loras': x}), disable_loras, None)
 
     update_checkpoints.click(get_checkpoints, None, checkpoint)
     checkpoint.change(lambda x: a1111Status.update({'sd_checkpoint': x}), checkpoint, None)
@@ -714,15 +412,10 @@ def ui():
     checkpoint_prompt.change(lambda x: params.update({'checkpoint_prompt': x}), checkpoint_prompt, None)
 
     translations.change(lambda x: params.update({'translations': x}), translations, None)
-    secondary_prompt.change(lambda x: params.update({'secondary_prompt': x}), secondary_prompt, None)
-    secondary_positive_prompt.change(lambda x: params.update({'secondary_positive_prompt': x}), secondary_positive_prompt, None)
-    secondary_negative_prompt.change(lambda x: params.update({'secondary_negative_prompt': x}), secondary_negative_prompt, None)
+    character_tags.change(lambda x: params.update({'character_tags': x}), character_tags, None)
 
     update_samplers.click(get_samplers, None, sampler_name)
     sampler_name.change(lambda x: params.update({'sampler_name': x}), sampler_name, None)
     steps.change(lambda x: params.update({'steps': x}), steps, None)
     seed.change(lambda x: params.update({'seed': x}), seed, None)
     cfg_scale.change(lambda x: params.update({'cfg_scale': x}), cfg_scale, None)
-
-    force_pic.click(lambda x: toggle_generation(True), inputs=force_pic, outputs=None)
-    suppr_pic.click(lambda x: toggle_generation(False), inputs=suppr_pic, outputs=None)
