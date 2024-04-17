@@ -8,65 +8,37 @@ This is a different approach building on the work from the following extensions:
 - https://github.com/Brawlence/SD_api_pics
 - https://github.com/oobabooga/text-generation-webui
 
-The basic idea is that we can teach the bot a photo format to send via text, parse that format and send it as a prompt  to SD WebUI.
+The basic idea is that we can teach the bot a photo format to send via text, parse that format and send it as a prompt to SD WebUI.
 
 ## Installation
 
 To install, in a command line:
-
 - Navigate to your text-generation-webui folder
 - Enter the extensions folder
 - `git clone https://github.com/Bryan5Alive/sd_api_pictures_natural.git`
 
-## Usage
+**Optional but highly recommended.** Install my other extension https://github.com/Bryan5Alive/grammar_sys_msg_ctx which parses instructions from grammar files.
 
-Load it in the `--chat-instruct` mode with `--extension sd_api_pictures_natural`.
+Copy the files `from sd_api_pictures_natural/grammars` to your `text-generation-webui/grammars` folder.
 
 ## Prerequisites
 
 Requires an instance of Automatic1111's WebUI running with an `--api` flag.
 
-Mode must be `chat-instruct` and you must provide a `Custom system message` that teaches the bot to use the photo
-format:
+## Usage option 1 (with grammar_sys_msg_ctx extension)
+- Start WebUI with the `grammar_sys_msg_ctx` and `sd_api_pictures_natural` extensions.
+- Configure your SD settings.
+- From "Parameters" tab in WebUI, select a grammar that you previously copied to `text-generation-webui/grammars`.
+- **Recommended.** Use `chat-instruct` mode.
+- Tell the AI to send you a photo.
 
-```xml
-
-<photo description="..."/>
-```
-
-Here is a good starting point for the instructions (refine as needed):
-
-```
-Always use this template when sending any photo: <photo description="{{photoDescription}}"/>
-photoDescription must visually describe the contents of the photo.
-photoDescription must be terse, non-narrative, simple and objective.
-Output example (change this for each photo): <photo description="an old witch wearing black, sitting in a dark forest"/>
-Output must be a valid self-closing XML element called "photo" with the attribute "description".
-```
-
-These instructions work well for the few models I've experimented with (**solar-10.7b-instruct-v1.0**), but they may need to be tweaked depending on the model.
-
-The XML attributes will be mapped to the strings in your `Positive prompt template` which defaults to `{{positivePrompt}}, {{description}}`.
-
-### Advanced bot instructions
-
-You are not limited to the XML format and Custom system message above. **You can instruct the bot to add any attributes you want.** They will be parsed out and injected into the `Positive prompt template` which you can customize.
-
-For example, you could add `personName` and `personClothing` to the xml and instructions above like so:
-
-```
-Always use this template when sending any photo: <photo personName="{{personName}}" personClothing="{{personClothing}}" description="{{photoDescription}}"/>
-personName must be the name of the person in the photo.
-personClothing must visually describe the clothing of the person in the photo.
-```
-
-Then you can simply change `Positive prompt template` to `{{positivePrompt}}, {{personName}}, {{personClothing}}, {{description}}`.
-
-This is valuable for adding weights to certain aspects of the photo.
-
-For example, you could increase the weight of the clothing description by changing `Positive prompt template` to `{{positivePrompt}}, {{personName}}, ({{personClothing}}:2), {{description}}`.
-
-Note: You can completely remove the `description` attribute and replace it with other attributes, however, the `personName` attribute is used to trigger SD Character tags (see below) so it is required if you want to use them. The `positivePrompt` attribute is where your **Positive prompt** field will be injected.
+## Usage option 2 (only sd_api_pictures_natural extension)
+- Start WebUI with the `sd_api_pictures_natural` extensions.
+- Configure your SD settings.
+- Manually set your `Custom system message` to instructions that will steer the bot towards the right xml format. See the grammar file under "grammar_sys_msg" for an example.
+- Manually set your `Positive prompt template` from the extension settings. Again, see the grammar file under "sd_prompt_template" for an example.
+- **Recommended.** Use `chat-instruct` mode.
+- Tell the AI to send you a photo.
 
 ### Activate SD character tags
 
@@ -76,16 +48,16 @@ JSON:
 
 ```json
 {
-  "sd_tags_positive": "24 year old, asian, long blond hair, ((twintail)), blue eyes, soft skin, height 5'8, woman, <lora:shojovibe_v11:0.1>",
-  "sd_tags_negative": "old, elderly, child, deformed, cross-eyed"
+  "sd_character_positive_prompt": "24 year old, asian, long blond hair, ((twintail)), blue eyes, soft skin, height 5'8, woman, <lora:shojovibe_v11:0.1>",
+  "sd_character_negative_prompt": "old, elderly, child, deformed, cross-eyed"
 }
 ```
 
 YAML:
 
 ```yaml
-sd_tags_positive: 24 year old, asian, long blond hair, ((twintail)), blue eyes, soft skin, height 5'8, woman, <lora:shojovibe_v11:0.1>
-sd_tags_negative: old, elderly, child, deformed, cross-eyed
+sd_character_positive_prompt: 24 year old, asian, long blond hair, ((twintail)), blue eyes, soft skin, height 5'8, woman, <lora:shojovibe_v11:0.1>
+sd_character_negative_prompt: old, elderly, child, deformed, cross-eyed
 ```
 
 The tags can also include Stable Diffusion LORAs if you have any that are relevant.
@@ -178,19 +150,19 @@ JSON:
   "pairs": [
     {
       "name": "toonyou_beta3.safetensors [52768d2bc4]",
-      "positive_prompt": "cartoon",
-      "negative_prompt": "photograph, realistic"
+      "sd_checkpoint_positive_prompt": "cartoon",
+      "sd_checkpoint_negative_prompt": "photograph, realistic"
     },
     {
       "name": "analogMadness_v50.safetensors [f968fc436a]",
-      "positive_prompt": "photorealistic, realistic",
-      "negative_prompt": "cartoon, render, anime"
+      "sd_checkpoint_positive_prompt": "photorealistic, realistic",
+      "sd_checkpoint_negative_prompt": "cartoon, render, anime"
     }
   ]
 }
 ```
 
-### Persistent settings
+## Persistent settings
 
 Create or modify the `settings.yaml` in the `text-generation-webui` root directory to override the defaults present in script.py, ex:
 
@@ -206,17 +178,31 @@ sd_api_pictures_natural-translations: true
 sd_api_pictures_natural-character_tags: true
 ```
 
-### Troubleshooting
+## Troubleshooting
 
-While this form of receiving images from bots is more fun and natural it has some challenges:
+While this form of receiving images from bots is more natural it has some challenges:
 
 - Some models work better than others. I've had the most success with **solar-10.7b-instruct-v1.0** which is also a
   great model.
-- Sometimes the bot almost gets it. They may send malformed XML or forget attributes.
-    - Try regenerating their response until they get it.
-    - Try guiding the bot by saying "Use the right photo format".
-- Sometimes the bot doesn't use the format at all. Again, try regenerating their response until they get it.
+- Sometimes the bot doesn't use the format at all.
     - Try regenerating their response until they get it.
     - Try guiding the bot by saying "Send the photo" or "Try sending the photo again".
 
-In general, once they figure it out they consistently send photos correctly and it's really fun.
+In general, once they figure it out they consistently send photos correctly.
+
+## Advanced
+You can create or modify the grammar files to have additional attributes. These will be parsed from the bot's output and available to inject into the prompt template.
+
+For example starting with:
+```
+photo-xml ::= "<photo detailed_visual_transcription_of_photo_contents=\"" value "\"/>"
+```
+And prompt template `{{detailed_visual_transcription_of_photo_contents}}`.
+
+You could add the time of day of the photo like so:
+```
+photo-xml ::= "<photo time_of_day_taken=\" value "\" detailed_visual_transcription_of_photo_contents=\"" value "\"/>"
+```
+And prompt template `{{detailed_visual_transcription_of_photo_contents}} taken at {{time_of_day_taken}}`.
+
+The prompt template is a Jinja2 template, so you can use additional template syntax to make more complex prompts.

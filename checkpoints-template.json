@@ -1,0 +1,14 @@
+{
+  "pairs": [
+    {
+      "name": "toonyou_beta3.safetensors [52768d2bc4]",
+      "sd_checkpoint_positive_prompt": "cartoon",
+      "sd_checkpoint_negative_prompt": "photograph, realistic"
+    },
+    {
+      "name": "analogMadness_v50.safetensors [f968fc436a]",
+      "sd_checkpoint_positive_prompt": "photorealistic, realistic",
+      "sd_checkpoint_negative_prompt": "cartoon, render, anime"
+    }
+  ]
+}

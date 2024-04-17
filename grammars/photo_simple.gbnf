@@ -1,0 +1,19 @@
+root ::= response photo-xml? "\n"
+
+photo-xml ::= "<photo detailed_visual_transcription_of_photo_contents=\"" value "\"/>"
+
+# General
+response ::= [^<^>^\n]+
+value ::= word ((" " | ", ") word)*
+word ::= simple-word | hyphenated-word
+hyphenated-word ::= simple-word "-" simple-word
+simple-word ::= [a-z]+
+
+# grammar_sys_msg:
+# Always sends photos using the tag "<photo/>".
+
+# grammar_ctx:
+# {{char}} sends photos using the tag "<photo/>".
+
+# sd_prompt_template:
+# {{detailed_visual_transcription_of_photo_contents}}
