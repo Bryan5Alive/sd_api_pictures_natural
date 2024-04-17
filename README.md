@@ -10,6 +10,8 @@ This is a different approach building on the work from the following extensions:
 
 The basic idea is that we can teach the bot a photo format to send via text, parse that format and send it as a prompt to SD WebUI.
 
+![Screenshot 2024-04-17 at 18-37-30 Text generation web UI](https://github.com/Bryan5Alive/sd_api_pictures_natural/assets/164429111/6e1300ab-78f7-4210-9b33-da0c81e8a7ad)
+
 ## Installation
 
 To install, in a command line:
