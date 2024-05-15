@@ -31,7 +31,8 @@ Requires an instance of Automatic1111's WebUI running with an `--api` flag.
 ## Usage
 
 From the "Parameters" tab in the UI find "Load grammar from file (.gbnf)" and select one of the grammars you copied from sd_api_pictures_natural/grammars (photo.gbnf or photo_simple.gbnf).
-You're all set.
+
+You're all set!
 
 ## Persistent settings
 
