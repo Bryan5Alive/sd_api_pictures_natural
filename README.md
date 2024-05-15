@@ -21,6 +21,7 @@ To install, in a command line:
 - `git clone https://github.com/Bryan5Alive/sd_api_pictures_natural.git` (this extension)
   
 Copy the files `from sd_api_pictures_natural/grammars` to your `text-generation-webui/grammars` folder.
+
 Enable both extensions.
 
 ## Prerequisites
