@@ -1,19 +1,37 @@
-root ::= response photo-xml? "\n"
+root ::= sd-api-pictures-natural-response-default
+# These are required by the extension
+sd-api-pictures-natural-response-default ::= (message | message photo-xml | photo-xml) "\n"
+sd-api-pictures-natural-response-photo ::= photo-xml "\n"
+sd-api-pictures-natural-response-message ::= message "\n"
+message ::= [^<^>^\n]+
 
-photo-xml ::= "<photo detailed_visual_transcription_of_photo_contents=\"" value "\"/>"
+photo-xml ::= "<photo detailed_visual_transcription_of_photo_contents=\"" value "\"></photo>"
 
 # General
-response ::= [^<^>^\n]+
-value ::= word ((" " | ", ") word)*
+value ::= word (gap word)*
 word ::= simple-word | hyphenated-word
 hyphenated-word ::= simple-word "-" simple-word
-simple-word ::= [a-z]+
+simple-word ::= alpha+
+gap ::= " " | ", "
+alpha ::= [a-zA-Z]
 
 # grammar_sys_msg:
-# Always sends photos using the tag "<photo/>".
 
 # grammar_ctx:
-# {{char}} sends photos using the tag "<photo/>".
+# Photo Instructions:
+# - {{char}} displays imagery using the '<photo/>' tag.
+# - All XML attributes should be concise with strong visual language.
 
-# sd_prompt_template:
-# {{detailed_visual_transcription_of_photo_contents}}
+# sd_api_pictures_natural:
+# {
+#     "positive_prompt": "
+#       {{detailed_visual_transcription_of_photo_contents}}
+#       {% if _ext.positive_prompt %}{{ _ext.positive_prompt }}{% endif %}
+#     ",
+#     "summary": "
+#       {{detailed_visual_transcription_of_photo_contents}}
+#     ",
+#     "negative_prompt": "
+#       {% if _ext.negative_prompt %}{{ _ext.negative_prompt }}{% endif %}
+#     "
+# }

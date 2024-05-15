@@ -1,0 +1,147 @@
+root ::= sd-api-pictures-natural-response-default
+# These are required by the extension
+sd-api-pictures-natural-response-default ::= (message | message photo-xml | photo-xml) "\n"
+sd-api-pictures-natural-response-photo ::= photo-xml "\n"
+sd-api-pictures-natural-response-message ::= message "\n"
+message ::= [^<^>^\n]+ 
+
+photo-xml ::= " " (photo-of-male-xml | photo-of-female-xml | photo-of-object-xml)
+photo-of-male-xml ::= "<photo_of_male" details-attrs ">" subject-male-xml "</photo_of_male>"
+photo-of-female-xml ::= "<photo_of_female" details-attrs ">" subject-female-xml "</photo_of_female>"
+subject-male-xml ::= "<subject" subject-name-age-race-attrs subject-pose-attr subject-mood-attr">" face-xml hair-xml body-xml outfit-xml "</subject>"
+subject-female-xml ::= "<subject" subject-name-age-race-attrs subject-pose-attr subject-mood-attr">" face-xml hair-xml body-xml outfit-xml "</subject>"
+photo-of-object-xml ::= "<photo_of_object" contents-attr details-attrs "></photo_of_object>"
+
+subject-name-age-race-attrs ::= subject-name-attr subject-age-attr subject-race-attr
+subject-name-attr ::= " first_and_last_name=\"" [A-Z][a-z]+ " " [A-Z][a-z]+ "\""
+subject-age-attr ::= " age=\"" [1-9][0-9]? "\""
+subject-race-attr ::= " race=\"" ("caucasian" | "asian" | "hispanic" | "african" | "native american" | "middle eastern" | "indian" | "pacific islander") "\""
+
+subject-pose-attr ::= " physical_pose=\"" value-lg "\""
+subject-mood-attr ::= " mood=\"" value-lg "\""
+
+outfit-xml ::= "<outfit>" ("<naked/>" | article-xml+) "</outfit>"
+article-xml ::= "<article" article-color-attr article-type-attr "/>"
+article-color-attr ::= " color=\"" shade-color "\""
+article-type-attr ::= " summary=\"" value-lg "\""
+
+hair-xml ::= "<hair" hair-color-attr hair-length-attr hair-texture-attr hair-style-attr "/>"
+hair-color-attr ::= " color=\"" value-sm "\""
+hair-length-attr ::= " length=\"" word "\""
+hair-texture-attr ::= " texture=\"" word "\""
+hair-style-attr ::= " style=\"" value-sm "\""
+
+body-xml ::= "<body" body-build-attr body-bust-size-attr "/>"
+body-build-attr ::= " build=\"" word "\""
+body-bust-size-attr ::= " bust_size=\"" word "\""
+
+face-xml ::= "<face" face-shape-attr face-eye-color-attr face-makeup-attr "/>"
+face-shape-attr ::= " shape=\"" face-shape "\""
+face-shape ::= "oval" | "round" | "square" | "rectangle" | "heart" | "diamond" | "triangle"
+face-eye-color-attr ::= " eye_color=\"" face-eye-color "\""
+face-eye-color ::= "brown" | "blue" | "green" | "hazel" | "gray" | "amber" | "red"
+face-makeup-attr ::= " makeup=\"" value-md "\""
+
+# Object photo attributes
+contents-attr ::= " contents=\"" value-xl "\""
+
+# General photo attributes
+details-attrs ::= shot-size-attr angle-attr location-attr season-attr time-attr lighting-attr
+
+shot-size-attr ::= " shot_size=\"" shot-size "\""
+shot-size ::= "wide" | "medium" | "close-up" | "long"
+
+angle-attr ::= " angle=\"" ("front" | "side" | "back") "\""
+location-attr ::= " physical_location=\"" ("at" | "in" | "by") " " ("a" | "an" | "the" | "his" | "her" | "their") " " word "\""
+season-attr ::= " season_taken=\"" ("spring" | "summer" | "autumn" | "winter") "\""
+time-attr ::= " time_taken=\"" ("morning" | "afternoon" | "evening" | "night") "\""
+lighting-attr ::= " lighting=\"" ("dim" | "moderate" | "bright") " " ("warm" | "cool") " " ("soft" | "harsh") "\""
+
+# General non-terminal
+value-xl ::= word (gap word)*
+value-lg ::= word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word (gap word)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?
+value-md ::= word (gap word (gap word (gap word (gap word (gap word (gap word (gap word)?)?)?)?)?)?)?
+value-sm ::= word (gap word (gap word (gap word)?)?)?
+word ::= simple-word | hyphenated-word
+hyphenated-word ::= simple-word "-" simple-word
+simple-word ::= alpha (alpha (alpha (alpha (alpha (alpha (alpha (alpha (alpha (alpha (alpha (alpha)?)?)?)?)?)?)?)?)?)?)?
+gap ::= " "
+alpha ::= [a-zA-Z]
+
+shade ::= "light" | "dark" | "bright" | "pastel" | "muted" | "deep" | "semi-transparent" | "transparent"
+color ::= "red" | "blue" | "yellow" | "green" | "orange" | "purple" | "lavender" | "black" | "white" | "grey" | "pink" | "brown" | "cyan" | "magenta" | "teal" | "navy" | "maroon" | "beige" | "olive" | "cream" | "gold" | "silver" | "transparent"
+shade-color ::= (shade " ")? color
+
+# grammar_sys_msg:
+
+# grammar_ctx:
+# Photo Instructions:
+# - {{char}} displays imagery using the '<photo_of_male>',  '<photo_of_female>' or '<photo_of_object>' tags.
+# - All XML attributes should be concise with strong visual language.
+# - The '<outfit>' element must include every article of clothing worn using a list of '<article/>' elements. For example: '<outfit>[every article worn]</outfit>'
+
+# sd_api_pictures_natural:
+# {
+#   {% if _ext.photo_type == 'photo_of_male' or _ext.photo_type == 'photo_of_female' %}
+#     {% set portrait_type = {"wide": "full body", "long": "full body", "medium": "three-quarter", "close-up": "headshot"} %}
+#     {% if _ext.photo_type == 'photo_of_male' %}{% set calc_gender = 'boy' if subject[0].age|int < 13 else 'teen male' if subject[0].age|int < 18 else 'man' %}{% endif %}
+#     {% if _ext.photo_type == 'photo_of_female' %}{% set calc_gender = 'girl' if subject[0].age|int < 13 else 'teen female' if subject[0].age|int < 18 else 'woman' %}{% endif %}
+#     {% set name_parts = subject[0].first_and_last_name.split() %}
+#
+#     {# It turns out it's very hard to make the AI define how much clothing they are wearing. Below are regex patterns which should cover most clothing pretty well. #}
+#     {% set top_list = ['(\w+[-\s]?)?coat', '(\w+[-\s]?)?shirt', '(\w+[-\s]?)?top', 'blouse', 'bodysuit', 'bra', 'camisole', 'cardigan', 'hoodie', 'jacket', 'kimono', 'sweater', 'tee', 'turtleneck'] %}
+#     {% set bottom_list = ['(\w+[-\s]?)?pant[s]?', '(\w+[-\s]?)?shorts?', '(\w+[-\s]?)?skirt',  'bikini[-\s]?bottom', 'capris', 'culottes', 'g[-\s]?string', 'jean[s]?', 'legging[s]?', 'pantie[s]?', 'thong', 'tights', 'trousers', 'underwear'] %}
+#     {% set both_list = ['(\w+[-\s]?)?dress', '(\w+[-\s]?)?gown', '(\w+[-\s]?)?suit', 'baby[-\s]?doll', 'bikini', 'chemise', 'costume', 'lingerie', 'romper'] %}
+#   
+#     {% set calc = namespace(articles=[], topless=true, bottomless=true) %}
+#     {% for article in subject[0].outfit[0].article %}
+#       {% set _ = calc.articles.append(article.color + " " + article.summary) %}
+#       {% if article.summary | contains_any_phrase(top_list) %}{% set calc.topless = false %}{% endif %}
+#       {% if article.summary | contains_any_phrase(bottom_list) %}{% set calc.bottomless = false %}{% endif %}
+#       {% if article.summary | contains_any_phrase(both_list) %}{% set calc.topless = false %}{% set calc.bottomless = false %}{% endif %}
+#     {% endfor %}
+#
+#     "positive_prompt": "
+#       ({{ portrait_type[shot_size] }} portrait), ({{ angle }} shot),
+#       {{ subject[0].first_and_last_name }}, a {{ subject[0].age }}-year-old {{ subject[0].race }} {{ calc_gender }},
+#       {% if calc.topless %}(topless:2), {% endif %}
+#       {% if calc.bottomless %}(bottomless:2), {% endif %}
+#       {% if calc.articles %}wearing {{ calc.articles|join(', ') }}, {% endif %}
+#       {{ subject[0].physical_pose }} {{ physical_location }} with a {{ subject[0].mood }} facial expression,
+#       {{ subject[0].face[0].shape }} shaped face, {{ subject[0].face[0].eye_color }} eyes, {{ subject[0].face[0].makeup }} makeup, {{ subject[0].body[0].build }} build, {{ subject[0].body[0].stature }} stature, {{ subject[0].body[0].bust_size }} bust,
+#       {{ subject[0].hair[0].texture }} {{ subject[0].hair[0].color }} {{ subject[0].hair[0].length }} hair, {{ subject[0].hair[0].style }} hairstyle,
+#       {% if _ext.character_name in name_parts %}
+#         {{ _ext.sd_character_positive_prompt }}, 
+#       {% endif %}
+#       {{ shot_size }} shot, captured during {{ season_taken }} {{ time_taken }}, under {{ lighting }} lighting,
+#       {% if _ext.positive_prompt %}{{ _ext.positive_prompt }}{% endif %} 
+#     ",
+#     "summary": "
+#       {{ subject[0].first_and_last_name }},
+#       {% if calc.topless %}topless, {% endif %}
+#       {% if calc.bottomless %}bottomless, {% endif %}
+#       {% if calc.articles %}wearing {{ calc.articles|join(', ') }}, {% endif %}
+#       {{ subject[0].physical_pose }} {{ physical_location }} with a {{ subject[0].mood }} facial expression,
+#       {{ subject[0].face[0].makeup }} makeup,
+#       {{ subject[0].hair[0].style }} hairstyle, 
+#     ",
+#     "negative_prompt": "
+#       {% if _ext.character_name in name_parts %}
+#         {{ _ext.sd_character_negative_prompt }},
+#       {% endif %}
+#       {% if _ext.negative_prompt %}{{ _ext.negative_prompt }}{% endif %}
+#     "
+#   {% else %}
+#     "positive_prompt": "
+#       {{ contents }}, {{ physical_location }}
+#       {{ shot_size }} shot, captured during {{ season_taken }} {{ time_taken }}, under {{ lighting }} lighting,
+#       {% if _ext.positive_prompt %}{{ _ext.positive_prompt }}{% endif %} 
+#     ",
+#     "summary": "
+#       {{ contents }}, {{ physical_location }}
+#     ",
+#     "negative_prompt": "
+#       {% if _ext.negative_prompt %}{{ _ext.negative_prompt }}{% endif %}
+#     "
+#   {% endif %}
+# }

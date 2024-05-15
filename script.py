@@ -1,3 +1,6 @@
+from datetime import date
+from pathlib import Path
+
 import base64
 import html
 import io
@@ -6,28 +9,27 @@ import pprint
 import re
 import time
 import xml.etree.ElementTree as ET
-from datetime import date
-from pathlib import Path
-
 import gradio as gr
 import requests
 import torch
 import yaml
-from jinja2 import Template, Undefined
-from modules.models import reload_model, unload_model
 from PIL import Image
+from jinja2 import Environment, BaseLoader, select_autoescape, Undefined
+from modules.models import reload_model, unload_model
 
 torch._C._jit_set_profiling_mode(False)
 
 # Parameters which can be customized in settings.json (or settings.yaml) of WebUI
 params = {
     'address': 'http://127.0.0.1:7860',
+    'pause_photos': False,
     'manage_vram': False,
     'save_img': False,
     'positive_prompt': '',
     'negative_prompt': '',
     'width': 512,
     'height': 512,
+    'size': 300,
     'denoising_strength': 0.61,
     'restore_faces': False,
     'enable_hr': False,
@@ -35,12 +37,15 @@ params = {
     'hr_scale': '1.0',
     'seed': -1,
     'sampler_name': 'DDIM',
+    'scheduler': 'automatic',
     'steps': 32,
     'cfg_scale': 7,
     'translations': False,
     'checkpoint_prompt': False,
     'character_tags': False,
-    'prompt_template': '',
+    'prompt_template_positive': '',
+    'prompt_template_negative': '',
+    'debug': False
 }
 
 EXTENSION_PATH = 'extensions/sd_api_pictures_natural'
@@ -51,6 +56,8 @@ a1111Status = {
     'checkpoint_negative_prompt': ''
 }
 checkpoint_list = []
+
+photo_summary = ''
 
 
 def give_vram_priority(actor):
@@ -118,6 +125,7 @@ def get_sd_pictures(positive_prompt, negative_prompt, character_name):
         'negative_prompt': negative_prompt,
         'seed': params['seed'],
         'sampler_name': params['sampler_name'],
+        'scheduler': params['scheduler'],
         'enable_hr': params['enable_hr'],
         'hr_scale': params['hr_scale'],
         'hr_upscaler': params['hr_upscaler'],
@@ -136,6 +144,7 @@ def get_sd_pictures(positive_prompt, negative_prompt, character_name):
     r = response.json()
 
     visible_result = ''
+    size = params['size']
     for img_str in r['images']:
         if params['save_img']:
             img_data = base64.b64decode(img_str)
@@ -147,16 +156,16 @@ def get_sd_pictures(positive_prompt, negative_prompt, character_name):
             with open(output_file.as_posix(), 'wb') as f:
                 f.write(img_data)
 
-            visible_result = visible_result + f'<img src="/file/{EXTENSION_PATH}/outputs/{variadic}.png" style="max-width: unset; max-height: unset; margin-top: 1em;">\n'
+            visible_result = visible_result + f'<img src="/file/{EXTENSION_PATH}/outputs/{variadic}.png" style="max-width: {size}px; max-height: {size}px; width: auto; height: auto; margin-top: 1em;">\n'
         else:
             image = Image.open(io.BytesIO(base64.b64decode(img_str.split(',', 1)[0])))
-            image.thumbnail((300, 300))
+            image.thumbnail((params['size'], params['size']))
             buffered = io.BytesIO()
             image.save(buffered, format='JPEG')
             buffered.seek(0)
             image_bytes = buffered.getvalue()
             img_str = 'data:image/jpeg;base64,' + base64.b64encode(image_bytes).decode()
-            visible_result = visible_result + f'<img src="{img_str}" style="max-width: unset; max-height: unset; margin-top: 1em;">\n'
+            visible_result = visible_result + f'<img src="{img_str}" style="max-width: {size}px; max-height: {size}px; width: auto; height: auto; margin-top: 1em;">\n'
 
     if params['manage_vram']:
         give_vram_priority('LLM')
@@ -169,59 +178,83 @@ class SilentUndefined(Undefined):
         return ''
 
 
-def prompt_from_template(template_string, photo_attributes):
-    template = Template(template_string, undefined=SilentUndefined)
-    return template.render(photo_attributes)
+def data_from_template(template_string, photo_attributes):
+    env = Environment(
+        loader=BaseLoader(),
+        autoescape=select_autoescape(['html', 'xml']),
+        undefined=SilentUndefined
+    )
+    env.filters['contains_any_phrase'] = contains_any_phrase
+    template = env.from_string(template_string)
+    return template.render(photo_attributes).strip()
 
 
 def combine_strings(str1, str2):
-    return ', '.join([s for s in [str1, str2] if s])
+    if str1 and str2:
+        return str1 + ', ' + str2
+    if str1:
+        return str1
+    if str2:
+        return str2
+    return ''
 
 
-def parse_prompt_template_from_grammar(state):
+def parse_template_from_grammar(state, template_marker):
     result = ''
 
     if 'grammar_string' in state and state['grammar_string']:
         lines = state['grammar_string'].split('\n')
         found_marker = False
         for line in lines:
-            if line.strip() == '# sd_prompt_template:':
+            if line.strip() == template_marker:
                 found_marker = True
                 continue
             if found_marker:
                 if not line.startswith('#'):
                     break
                 else:
-                    result += line[2:].strip() + ' '
+                    if line[2:].strip():
+                        result += line[2:].strip() + ' '
 
     return result
 
 
-def flatten_xml(element, parent_path=None):
-    data = {}
+def contains_any_phrase(text, phrases):
+    for phrase in phrases:
+        pattern = r'\b' + phrase + r'\b'
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
 
-    for attr, value in element.attrib.items():
-        attr_path = attr if parent_path is None else f"{parent_path}.{attr}"
-        data[attr_path] = value
 
+def simplify_xml(element):
+    result = {**element.attrib}
     for child in element:
-        child_path = child.tag if parent_path is None else f"{parent_path}.{child.tag}"
-        child_data = flatten_xml(child, child_path)
-        data.update(child_data)
+        result.setdefault(child.tag, []).append(simplify_xml(child))
+    return result
 
-    return data
+
+def prompt_cleanup(value):
+    value = value.strip()
+    while value.endswith(','):
+        value = value[:-1].strip()
+    value = re.sub(r'\s+', ' ', value)
+    return value
 
 
 def parse_output(output_string, state):
-    print('\n\n*** output_string:\n' + html.unescape(output_string) + '\n\n')
+    if params['debug']:
+        print('\n\n*** output_string:\n' + html.unescape(output_string) + '\n\n')
+
+    global photo_summary
 
     output_string_unescaped = html.unescape(output_string)
 
-    character_name = state.get('character_menu', 'none').lower()
+    character_name = state.get('character_menu', 'none')
     positive_suffix = ''
     negative_suffix = ''
 
-    pattern = r'(?aims)<photo[^\s]*\s.*?\/>'
+    pattern = r'(?aims)<photo.*?>.*?</photo.*?>'
 
     result = ''
     remaining_text = output_string_unescaped
@@ -242,24 +275,32 @@ def parse_output(output_string, state):
             remaining_text = remaining_text[end:]
             continue
 
-        photo_attributes = flatten_xml(photo_element)
-        photo_attributes['positive_prompt'] = params['positive_prompt']
-        photo_attributes['photo_type'] = photo_element.tag
+        photo_attributes = simplify_xml(photo_element)
+        photo_attributes['_ext'] = {
+            'positive_prompt': params['positive_prompt'],
+            'negative_prompt': params['negative_prompt'],
+            'photo_type': photo_element.tag
+        }
 
-        pprint.pprint(photo_attributes)
+        character_data = None
+        if params['character_tags'] and character_name != 'none':
+            character_data = load_character_data(character_name)
+            photo_attributes['_ext']['character_name'] = character_name
+            photo_attributes['_ext']['sd_character_positive_prompt'] = character_data.get('sd_character_positive_prompt', '')
+            photo_attributes['_ext']['sd_character_negative_prompt'] = character_data.get('sd_character_negative_prompt', '')
 
-        prompt_template = params['prompt_template'] or parse_prompt_template_from_grammar(state)
-        positive_prompt = prompt_from_template(prompt_template, photo_attributes)
-        negative_prompt = params['negative_prompt']
+        if params['debug']:
+            pprint.pprint(photo_attributes)
 
-        character_data = load_character_data(character_name)
+        template = parse_template_from_grammar(state, '# sd_api_pictures_natural:')
+        data = json.loads(data_from_template(template, photo_attributes))
 
-        photo_person_name = photo_attributes.get('first_and_last_name', '').lower()
+        positive_prompt = data['positive_prompt'].strip()
+        photo_summary = data['summary'].strip()
+        negative_prompt = data['negative_prompt'].strip()
 
-        # If the user wants to parse character_tags and the bot provided a personName attribute then check if the personName attribute contains the bot name and add the tags to positive_suffix and negative_suffix
-        if params['character_tags'] and photo_person_name and character_name != 'none' and (photo_person_name == 'me' or character_name in photo_person_name):
-            positive_suffix = combine_strings(positive_suffix, character_data.get('sd_character_positive_prompt', ''))
-            negative_suffix = combine_strings(negative_suffix, character_data.get('sd_character_negative_prompt', ''))
+        if params['debug']:
+            pprint.pprint(data)
 
         # If the user wants to add translations than iterate the translation patterns from translations.json and from the character data, adding them to positive_suffix and negative_suffix
         if params['translations']:
@@ -269,13 +310,14 @@ def parse_output(output_string, state):
                     translations_data = json.load(file)
             else:
                 translations_data = {'pairs': []}
-            translations_data['pairs'] += character_data.get('translation_patterns', [])
+            if character_data:
+                translations_data['pairs'] += character_data.get('translation_patterns', [])
             triggered_array = [0] * len(translations_data['pairs'])
             for i, word_pair in enumerate(translations_data['pairs']):
                 if triggered_array[i] != 1:
                     is_descriptive_word_present = False
                     for descriptive_word in word_pair['descriptive_word']:
-                        if (descriptive_word.lower() in positive_prompt) or (descriptive_word.lower() in photo_person_name):
+                        if descriptive_word.lower() in positive_prompt:
                             is_descriptive_word_present = True
                             break
                     if is_descriptive_word_present:
@@ -288,28 +330,77 @@ def parse_output(output_string, state):
             positive_suffix = combine_strings(positive_suffix, a1111Status['sd_checkpoint_positive_prompt'])
             negative_suffix = combine_strings(negative_suffix, a1111Status['sd_checkpoint_negative_prompt'])
 
-        final_positive_prompt = html.unescape(combine_strings(positive_prompt, positive_suffix))
-        final_negative_prompt = html.unescape(combine_strings(negative_prompt, negative_suffix))
+        final_positive_prompt = prompt_cleanup(html.unescape(combine_strings(positive_prompt, positive_suffix)))
+        final_negative_prompt = prompt_cleanup(html.unescape(combine_strings(negative_prompt, negative_suffix)))
 
-        print('\n\n*** final_positive_prompt:\n' + html.unescape(final_positive_prompt) + '\n\n')
-        print('\n\n*** final_negative_prompt:\n' + html.unescape(final_negative_prompt) + '\n\n')
+        if params['debug']:
+            print('\n\n*** final_positive_prompt:\n' + html.unescape(final_positive_prompt) + '\n\n')
+            print('\n\n*** final_negative_prompt:\n' + html.unescape(final_negative_prompt) + '\n\n')
 
-        image = get_sd_pictures(final_positive_prompt, final_negative_prompt, character_name)
+        if sd_available():
+            image = get_sd_pictures(final_positive_prompt, final_negative_prompt, character_name)
+            result += html.escape(remaining_text[:start]) + image
 
-        result += html.escape(remaining_text[:start]) + image
         remaining_text = remaining_text[end:]
 
-    return result
+    return result if sd_available() else output_string
+
+
+def grammar_loaded(state):
+    return 'sd_api_pictures_natural:' in state['grammar_string'].split()
+
+
+# Erase the lengthy XML describing the photo so that we don't fill context with it
+def history_modifier(history):
+    global photo_summary
+    latest_reply = history['internal'][-1][1]
+    pattern = r'(?ai)<photo.*?>.*?</photo.*?>'
+    updated_reply = re.sub(pattern, f'<photo contents="{photo_summary}"/>', latest_reply)
+    history['internal'][-1][1] = updated_reply
+    return history
 
 
 def output_modifier(text, state):
     if text == '':
         return '[Error decoding message]'
 
-    if not sd_available():
-        return text
-
     return parse_output(text, state)
+
+
+# This function might be called twice in a row, first by state_modifier and optionally a second time by input_modifier
+def set_grammar_root(state, input_state):
+    if not grammar_loaded(state):
+        return
+
+    grammar_root_pattern = r'root ::= .*'
+    trigger_pattern = r'\*looks at ([^*]+)\*'
+
+    grammar_root = 'root ::= sd-api-pictures-natural-response-message' if params['pause_photos'] else 'root ::= sd-api-pictures-natural-response-default'
+
+    input_string = input_state['string'] if input_state['is_input'] else state['history']['visible'][-1][0]
+    match = re.search(trigger_pattern, input_string)
+    if match:
+        subject = match.group(1).lower()
+        character_name = state.get('name2', 'none').lower()
+        if subject in [character_name, 'you']:
+            subject = 'yourself'
+        if input_state['is_input']:
+            input_state['string'] = f'Send a photo of {subject} at this moment.'
+        grammar_root = 'root ::= sd-api-pictures-natural-response-photo'
+
+    state['grammar_string'] = re.sub(grammar_root_pattern, grammar_root, state['grammar_string'])
+
+
+def state_modifier(state):
+    input_state = {'is_input': False, 'string': ''}
+    set_grammar_root(state, input_state)
+    return state
+
+
+def input_modifier(string, state, is_chat=False):
+    input_state = {'is_input': True, 'string': string}
+    set_grammar_root(state, input_state)
+    return input_state['string']
 
 
 def filter_address(address):
@@ -394,17 +485,20 @@ def ui():
         with gr.Row():
             address = gr.Textbox(placeholder=params['address'], value=params['address'], label='Auto1111\'s WebUI address')
             with gr.Column(scale=1, min_width=300):
+                pause_photos = gr.Checkbox(value=params['pause_photos'], label='Pause photos')
                 manage_vram = gr.Checkbox(value=params['manage_vram'], label='Manage VRAM')
                 save_img = gr.Checkbox(value=params['save_img'], label='Keep original images and use them in chat')
                 translations = gr.Checkbox(value=params['translations'], label='Activate SD translations')
                 character_tags = gr.Checkbox(value=params['character_tags'], label='Activate SD character tags')
+                debug = gr.Checkbox(value=params['debug'], label='Debug')
         with gr.Row():
             checkpoint = gr.Dropdown(checkpoint_list, value=a1111Status['sd_checkpoint'], allow_custom_value=True, label='Checkpoint', type='value')
             checkpoint_prompt = gr.Checkbox(value=params['checkpoint_prompt'], label='Add checkpoint tags in prompt')
             update_checkpoints = gr.Button('Get list of checkpoints')
 
         with gr.Accordion('Generation parameters', open=False):
-            prompt_template = gr.Textbox(placeholder=params['prompt_template'], value=params['prompt_template'], label='Positive prompt template')
+            prompt_template_positive = gr.Textbox(placeholder=params['prompt_template_positive'], value=params['prompt_template_positive'], label='Positive prompt template')
+            prompt_template_negative = gr.Textbox(placeholder=params['prompt_template_negative'], value=params['prompt_template_negative'], label='Negative prompt template')
             positive_prompt = gr.Textbox(placeholder=params['positive_prompt'], value=params['positive_prompt'], label='Positive prompt')
             negative_prompt = gr.Textbox(placeholder=params['negative_prompt'], value=params['negative_prompt'], label='Negative prompt')
             with gr.Row():
@@ -428,12 +522,14 @@ def ui():
                 hr_upscaler = gr.Textbox(placeholder=params['hr_upscaler'], value=params['hr_upscaler'], label='Upscaler')
 
     address.change(lambda x: params.update({'address': filter_address(x)}), address, None)
+    pause_photos.change(lambda x: params.update({'pause_photos': x}), pause_photos, None)
     manage_vram.change(lambda x: params.update({'manage_vram': x}), manage_vram, None)
     manage_vram.change(lambda x: give_vram_priority('set' if x else 'reset'), inputs=manage_vram, outputs=None)
     save_img.change(lambda x: params.update({'save_img': x}), save_img, None)
 
     address.submit(fn=sd_api_address_update, inputs=address, outputs=address)
-    prompt_template.change(lambda x: params.update({'prompt_template': x}), prompt_template, None)
+    prompt_template_positive.change(lambda x: params.update({'prompt_template_positive': x}), prompt_template_positive, None)
+    prompt_template_negative.change(lambda x: params.update({'prompt_template_negative': x}), prompt_template_negative, None)
     positive_prompt.change(lambda x: params.update({'positive_prompt': x}), positive_prompt, None)
     negative_prompt.change(lambda x: params.update({'negative_prompt': x}), negative_prompt, None)
     width.change(lambda x: params.update({'width': x}), width, None)
@@ -452,6 +548,7 @@ def ui():
 
     translations.change(lambda x: params.update({'translations': x}), translations, None)
     character_tags.change(lambda x: params.update({'character_tags': x}), character_tags, None)
+    debug.change(lambda x: params.update({'debug': x}), debug, None)
 
     update_samplers.click(get_samplers, None, sampler_name)
     sampler_name.change(lambda x: params.update({'sampler_name': x}), sampler_name, None)
